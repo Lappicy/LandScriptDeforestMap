@@ -1,0 +1,47 @@
+Package: LandScriptDeforestMap
+Type: Package
+Title: Interactive Deforestation Analysis Using Classified Images
+Version: 2.0.0
+Authors@R: c(
+    person("Thiago", "Lappicy", role = c("aut", "cre"),
+           email = "lappicy@gmail.com")
+    )
+Description: Provides an updated workflow for evaluating deforestation and
+    land-cover changes from classified remote sensing images. It creates
+    spatial meshes, summarizes raster classes, calculates annual variations,
+    produces graphics and maps, and includes an interactive R Shiny
+    application.
+License: MIT + file LICENSE
+URL: https://github.com/Lappicy/LandScriptDeforestMap
+BugReports: https://github.com/Lappicy/LandScriptDeforestMap/issues
+Encoding: UTF-8
+LazyData: true
+Depends:
+    R (>= 4.3.0)
+Imports:
+    bslib,
+    callr,
+    dplyr,
+    DT,
+    ggplot2,
+    ggspatial,
+    htmltools,
+    jsonlite,
+    leaflet,
+    nngeo,
+    prettymapr,
+    processx,
+    raster,
+    rosm,
+    scales,
+    sf,
+    shiny,
+    shinyFiles,
+    stats,
+    terra,
+    tidyr,
+    writexl,
+    zip
+Suggests:
+    testthat
+RoxygenNote: 7.3.2
