@@ -249,8 +249,26 @@ read_result_dataset <- function(path, layer = NULL) {
   extension <- tolower(tools::file_ext(path))
   if (extension == "gpkg") {
     layers <- sf::st_layers(path)$name
+    if (!length(layers)) {
+      stop("O GeoPackage não possui camadas.", call. = FALSE)
+    }
     selected <- layer %||% if ("mesh" %in% layers) "mesh" else layers[[1]]
-    return(sf::st_read(path, layer = selected, quiet = TRUE, check.names = FALSE))
+    if (!selected %in% layers) {
+      stop(
+        "A camada '", selected, "' não existe no GeoPackage. Camadas disponíveis: ",
+        paste(layers, collapse = ", "),
+        ".",
+        call. = FALSE
+      )
+    }
+
+    # Não use check.names = FALSE aqui. Em GeoPackages cuja coluna espacial se
+    # chama "geom", esse argumento pode impedir o sf de reconhecer a geometria.
+    data <- sf::st_read(path, layer = selected, quiet = TRUE)
+    if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
+      stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
+    }
+    return(data)
   }
   if (extension %in% c("csv")) {
     return(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE))
@@ -267,4 +285,11 @@ read_result_dataset <- function(path, layer = NULL) {
     return(object)
   }
   stop("Formato de resultado não suportado.", call. = FALSE)
+}
+
+result_table_data <- function(data) {
+  if (inherits(data, "sf")) {
+    return(sf::st_drop_geometry(data))
+  }
+  as.data.frame(data)
 }

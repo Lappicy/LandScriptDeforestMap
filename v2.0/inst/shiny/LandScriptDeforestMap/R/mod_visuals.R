@@ -118,12 +118,39 @@ visuals_server <- function(id, automatic_result) {
       result[[input$auto_level %||% "mesh"]]
     })
 
+    current_table <- shiny::reactive({
+      result_table_data(current_data())
+    })
+
     output$source_status <- shiny::renderUI({
       if (!is.null(manual_error())) {
         return(app_alert(manual_error(), color = "danger"))
       }
       if (!is.null(manual_path())) {
-        return(app_alert(paste("Usando arquivo manual:", basename(manual_path())), color = "info"))
+        status <- tryCatch({
+          data <- current_data()
+          detail <- if (inherits(data, "sf")) {
+            paste0(
+              " — camada ", input$gpkg_layer,
+              ", ",
+              format(nrow(data), big.mark = ".", decimal.mark = ","),
+              " registros com geometria"
+            )
+          } else {
+            paste0(
+              " — ",
+              format(nrow(data), big.mark = ".", decimal.mark = ","),
+              " registros"
+            )
+          }
+          app_alert(
+            paste0("Usando arquivo manual: ", basename(manual_path()), detail),
+            color = "info"
+          )
+        }, error = function(e) {
+          app_alert(conditionMessage(e), color = "danger")
+        })
+        return(status)
       }
       if (!is.null(automatic_result())) {
         return(app_alert("Usando automaticamente o resultado da aba Executar análise.", color = "success"))
@@ -132,7 +159,7 @@ visuals_server <- function(id, automatic_result) {
     })
 
     shiny::observe({
-      data <- tryCatch(current_data(), error = function(e) NULL)
+      data <- tryCatch(current_table(), error = function(e) NULL)
       if (is.null(data)) return()
       numeric_columns <- plot_candidate_columns(data)
       default_primary <- if ("Deforestation" %in% numeric_columns) "Deforestation" else numeric_columns[[1]] %||% ""
@@ -150,9 +177,8 @@ visuals_server <- function(id, automatic_result) {
       years <- if ("Year" %in% names(data)) sort(unique(as.integer(as.character(data$Year)))) else integer()
       shiny::updateSelectizeInput(session, "map_years", choices = years, selected = years, server = TRUE)
 
-      plain_data <- if (inherits(data, "sf")) sf::st_drop_geometry(data) else as.data.frame(data)
-      non_numeric <- names(plain_data)[
-        !vapply(plain_data, is.numeric, logical(1))
+      non_numeric <- names(data)[
+        !vapply(data, is.numeric, logical(1))
       ]
       non_numeric <- setdiff(non_numeric, c("AnalysisLevel"))
       shiny::updateSelectInput(session, "chart_group", choices = c("Sem agrupamento" = "", stats::setNames(non_numeric, non_numeric)))
@@ -171,7 +197,7 @@ visuals_server <- function(id, automatic_result) {
     })
 
     chart_object <- shiny::reactive({
-      data <- current_data()
+      data <- current_table()
       build_timeseries_plot(
         data,
         comparison.columns = input$comparison_columns,
