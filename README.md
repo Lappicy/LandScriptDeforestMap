@@ -11,19 +11,7 @@ Este repositório mantém duas versões instaláveis e independentes:
 Cada pasta contém um pacote R completo. Por isso, a versão desejada deve ser
 informada no argumento `subdir`.
 
-## Instalação da versão 1.0
-
-```r
-install.packages("remotes")
-remotes::install_github(
-  "Lappicy/LandScriptDeforestMap",
-  subdir = "v1.0"
-)
-
-library(LandScriptDeforestMap)
-```
-
-## Instalação da versão 2.0
+## Instalação da versão 2.0 (mais atual)
 
 ```r
 install.packages("remotes")
@@ -41,6 +29,20 @@ Para iniciar a plataforma Shiny incluída na versão 2.0:
 LandScriptDeforestMap::runLandScriptApp()
 ```
 
+## Instalação de versões anteriores
+
+Na hora de instalar, basta substituir o subdiretório para a versão desejada (como "v1.0" por exemplo)
+
+```r
+install.packages("remotes")
+remotes::install_github(
+  "Lappicy/LandScriptDeforestMap",
+  subdir = "v1.0"
+)
+
+library(LandScriptDeforestMap)
+```
+
 ## Importante sobre as versões
 
 As duas versões usam o mesmo nome de pacote: `LandScriptDeforestMap`. Portanto,
@@ -51,28 +53,6 @@ Para conferir a versão ativa:
 
 ```r
 packageVersion("LandScriptDeforestMap")
-```
-
-Se for necessário manter as duas simultaneamente, instale cada uma em uma
-biblioteca diferente:
-
-```r
-dir.create("~/R/landscript-v1", recursive = TRUE, showWarnings = FALSE)
-dir.create("~/R/landscript-v2", recursive = TRUE, showWarnings = FALSE)
-
-remotes::install_github(
-  "Lappicy/LandScriptDeforestMap",
-  subdir = "v1.0",
-  lib = "~/R/landscript-v1"
-)
-
-remotes::install_github(
-  "Lappicy/LandScriptDeforestMap",
-  subdir = "v2.0",
-  lib = "~/R/landscript-v2"
-)
-
-library(LandScriptDeforestMap, lib.loc = "~/R/landscript-v2")
 ```
 
 ## Citação
