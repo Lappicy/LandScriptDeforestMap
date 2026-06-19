@@ -1,14 +1,14 @@
 Package: LandScriptDeforestMap
 Type: Package
 Title: Deforestation analysis using classified images
-Version: 0.2.0
+Version: 2.0
 Author: Thiago Lappicy
 Maintainer: Thiago Lappicy <lappicy@gmail.com>
 Description: This package was created for analysing deforestation behaviors using
     the already classified images. It creates a grid (mesh) to help
     with visualization. This package was thought out to be helpful to 
     link deforestation patterns with public policies.
-URL: https://github.com/Lappicy/DeforestMapBiomas
+URL: https://github.com/Lappicy/LandScriptDeforestMap
 License: MIT License
 Encoding: UTF-8
 LazyData: true
