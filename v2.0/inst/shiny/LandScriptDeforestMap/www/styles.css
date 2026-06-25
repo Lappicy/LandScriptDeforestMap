@@ -82,19 +82,24 @@ body {
 
 .geo-upload-dropzone .shiny-input-container,
 .raster-upload-dropzone .shiny-input-container {
-  width: 100%;
+  width: 100% !important;
+  max-width: none !important;
 }
 
 .geo-upload-dropzone .input-group,
 .raster-upload-dropzone .input-group {
-  display: grid;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
   gap: 0.45rem;
-  width: 100%;
+  width: 100% !important;
+  max-width: none !important;
 }
 
 .geo-upload-dropzone .input-group > *,
 .raster-upload-dropzone .input-group > * {
+  min-width: 0 !important;
   width: 100% !important;
+  max-width: none !important;
 }
 
 .geo-upload-dropzone .btn,
@@ -110,8 +115,12 @@ body {
 .geo-upload-dropzone .form-control,
 .raster-upload-dropzone .form-control {
   display: block;
+  grid-column: 1 / -1;
   width: 100% !important;
+  min-width: 100% !important;
+  max-width: none !important;
   flex: none !important;
+  flex-basis: 100% !important;
   box-sizing: border-box;
   min-height: 4.4rem;
   border: 2px dashed rgba(23, 107, 91, 0.38);
@@ -119,6 +128,13 @@ body {
   background: rgba(23, 107, 91, 0.045);
   color: var(--ls-muted);
   cursor: pointer;
+}
+
+.geo-upload-dropzone input[type="file"],
+.raster-upload-dropzone input[type="file"] {
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: none !important;
 }
 
 .geo-upload-dropzone .form-control:hover,

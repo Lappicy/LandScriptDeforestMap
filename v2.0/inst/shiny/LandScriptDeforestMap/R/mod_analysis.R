@@ -11,11 +11,6 @@ analysis_ui <- function(id) {
         bslib::accordion_panel(
           "1. Arquivo geoespacial",
           value = "step_geo",
-          shiny::tags$label(
-            class = "control-label",
-            `for` = ns("geo_upload"),
-            "GeoPackage, shapefile ou GeoJSON"
-          ),
           shiny::div(
             class = "geo-upload-dropzone",
             shiny::fileInput(
@@ -28,7 +23,7 @@ analysis_ui <- function(id) {
                 ".kml", ".gml"
               ),
               buttonLabel = "Selecionar ou arrastar arquivo(s)",
-              placeholder = "Solte aqui o GeoPackage, GeoJSON, ZIP ou shapefile completo"
+              placeholder = "Insira aqui o arquivo .gpkg, .shp, .zip, ou .json"
             ),
           ),
           shiny::helpText("Para shapefile, envie um .zip ou selecione/arraste .shp, .shx, .dbf e .prj juntos."),
@@ -57,27 +52,6 @@ analysis_ui <- function(id) {
         bslib::accordion_panel(
           "3. Rasters e classes",
           value = "step_rasters",
-          shiny::tags$label(
-            class = "control-label",
-            `for` = ns("raster_folder_button"),
-            "Pasta dos rasters classificados"
-          ),
-          shiny::div(
-            class = "folder-picker-actions",
-            shinyFiles::shinyDirButton(
-              ns("raster_folder_button"),
-              label = "Selecionar pasta…",
-              title = "Selecione a pasta que contém os rasters classificados",
-              buttonType = "primary",
-              class = "btn"
-            ),
-            shiny::actionButton(
-              ns("clear_raster_folder"),
-              "Limpar",
-              icon = shiny::icon("xmark"),
-              class = "btn-outline-secondary"
-            )
-          ),
           shiny::div(
             class = "raster-upload-dropzone",
             shiny::fileInput(
@@ -89,7 +63,7 @@ analysis_ui <- function(id) {
               placeholder = "Solte aqui uma pasta, .tif/.tiff ou ZIP com os rasters"
             )
           ),
-          shiny::helpText("Você pode selecionar uma pasta local pelo botão acima ou arrastar/selecionar uma pasta, rasters ou ZIP nesta caixa."),
+          shiny::helpText("Você pode selecionar/arrastar uma pasta, rasters ou ZIP nesta caixa."),
           shiny::uiOutput(ns("raster_folder_display")),
           shiny::selectInput(
             ns("mapbiomas"),
@@ -188,27 +162,6 @@ analysis_server <- function(id) {
     job_result_file <- shiny::reactiveVal(NULL)
     progress_state <- shiny::reactiveVal(list(percent = 0, stage = "Aguardando", detail = "", status = "idle"))
 
-    root_candidates <- c(
-      "Pasta pessoal" = path.expand("~"),
-      "Desktop" = file.path(path.expand("~"), "Desktop"),
-      "Downloads" = file.path(path.expand("~"), "Downloads"),
-      "Projeto LandScriptDeforestMap" = normalizePath(file.path(app_root(), ".."), mustWork = TRUE),
-      "Discos externos" = "/Volumes",
-      "Sistema" = .Platform$file.sep
-    )
-    root_candidates <- root_candidates[dir.exists(root_candidates)]
-    directory_roots <- stats::setNames(
-      normalizePath(unname(root_candidates), mustWork = TRUE),
-      names(root_candidates)
-    )
-    shinyFiles::shinyDirChoose(
-      input,
-      "raster_folder_button",
-      roots = directory_roots,
-      session = session,
-      defaultRoot = "Pasta pessoal",
-      allowDirCreate = FALSE
-    )
     set_raster_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
       raster_validation_state(list(
         status = status,
@@ -217,28 +170,6 @@ analysis_server <- function(id) {
         detail = as.character(detail %||% "")
       ))
       try(get("flushReact", asNamespace("shiny"))(), silent = TRUE)
-      invisible(NULL)
-    }
-
-    schedule_raster_validation <- function(path, token) {
-      run_validation <- function() {
-        if (!identical(token, raster_validation_token()) || !identical(path, raster_folder_path())) {
-          return(invisible(NULL))
-        }
-        tryCatch(
-          validate_rasters(),
-          error = function(e) {
-            if (identical(token, raster_validation_token())) {
-              raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
-            }
-          }
-        )
-      }
-
-      session$onFlushed(function() {
-        later::later(run_validation, delay = 0.15)
-      }, once = TRUE)
-
       invisible(NULL)
     }
 
@@ -295,26 +226,6 @@ analysis_server <- function(id) {
         )
       ))
     }
-
-    shiny::observeEvent(input$raster_folder_button, {
-      selected <- shinyFiles::parseDirPath(directory_roots, input$raster_folder_button)
-      if (length(selected) && nzchar(selected[[1]])) {
-        selected_path <- normalizePath(selected[[1]], mustWork = TRUE)
-        token <- raster_validation_token() + 1L
-        raster_validation_token(token)
-        raster_folder_path(selected_path)
-        raster_folder_label(selected_path)
-        validation_state(NULL)
-        pixel_area_value(NULL)
-        pixel_area_summary("—")
-        set_raster_validation_progress(
-          1,
-          "Carregando arquivos",
-          "A pasta foi selecionada. Preparando leitura dos rasters."
-        )
-        schedule_raster_validation(selected_path, token)
-      }
-    }, ignoreInit = TRUE)
 
     shiny::observeEvent(input$raster_upload, {
       upload <- input$raster_upload
