@@ -27,6 +27,7 @@ Imports:
     ggspatial,
     htmltools,
     jsonlite,
+    later,
     leaflet,
     nngeo,
     prettymapr,
