@@ -146,6 +146,13 @@ body {
   box-shadow: 0 0 0 0.18rem rgba(23, 107, 91, 0.12);
 }
 
+.geo-upload-dropzone.drag-active .form-control,
+.raster-upload-dropzone.drag-active .form-control {
+  border-color: var(--ls-accent);
+  background: rgba(23, 107, 91, 0.12);
+  box-shadow: 0 0 0 0.22rem rgba(23, 107, 91, 0.16);
+}
+
 .progress-status {
   display: grid;
   gap: 0.2rem;

@@ -175,7 +175,7 @@ analysis_server <- function(id) {
 
     schedule_uploaded_raster_validation <- function(upload, token) {
       run_upload_validation <- function() {
-        if (!identical(token, raster_validation_token())) {
+        if (!identical(token, shiny::isolate(raster_validation_token()))) {
           return(invisible(NULL))
         }
         tryCatch({
@@ -186,14 +186,14 @@ analysis_server <- function(id) {
           )
           upload_dir <- file.path(session_dir, paste0("rasters_", token, "_", as.integer(Sys.time())))
           staged_folder <- stage_raster_upload(upload, upload_dir)
-          if (!identical(token, raster_validation_token())) {
+          if (!identical(token, shiny::isolate(raster_validation_token()))) {
             return(invisible(NULL))
           }
           raster_folder_path(staged_folder)
           raster_folder_label(paste0("Upload: ", nrow(upload), " arquivo(s) enviado(s)"))
           validate_rasters()
         }, error = function(e) {
-          if (identical(token, raster_validation_token())) {
+          if (identical(token, shiny::isolate(raster_validation_token()))) {
             raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
           }
         })
@@ -416,8 +416,9 @@ analysis_server <- function(id) {
 
     validate_rasters <- function() {
       set_raster_validation_progress(1, "Carregando arquivos", "Acessando a pasta selecionada.")
+      folder <- shiny::isolate(raster_folder_path())
       inspection <- inspect_raster_folder(
-        raster_folder_path(),
+        folder,
         progress = set_raster_validation_progress
       )
       pixel_area_value(inspection$pixel_area_km2)
@@ -627,12 +628,36 @@ analysis_server <- function(id) {
     selected_result_data <- shiny::reactive({
       result <- analysis_result()
       shiny::req(result)
-      result[[input$result_level %||% "mesh"]]
+      level <- input$result_level
+      if (is.null(level) || length(level) != 1L || !nzchar(level)) {
+        level <- "mesh"
+      }
+      if (!level %in% c("mesh", "groups", "total") || is.null(result[[level]])) {
+        level <- "mesh"
+      }
+      result[[level]]
     })
 
     output$result_summary <- shiny::renderUI({
       result <- analysis_result()
       shiny::req(result)
+      group_count <- 1L
+      group_column <- result$group_column
+      if (!is.null(result$groups) && !is.null(group_column) &&
+          length(group_column) == 1L && nzchar(group_column) &&
+          group_column %in% names(result$groups)) {
+        group_count <- length(unique(result$groups[[group_column]]))
+      }
+      year_min <- if (!is.null(result$raster_index$year) && length(result$raster_index$year)) {
+        min(result$raster_index$year, na.rm = TRUE)
+      } else {
+        NA
+      }
+      year_max <- if (!is.null(result$raster_index$year) && length(result$raster_index$year)) {
+        max(result$raster_index$year, na.rm = TRUE)
+      } else {
+        NA
+      }
       shiny::tagList(
         if (isTRUE(result$overlap_removed)) {
           app_alert(
@@ -651,23 +676,24 @@ analysis_server <- function(id) {
           bslib::value_box(
             "Grupos",
             format(
-              length(unique(result$groups[[result$group_column]])),
+              group_count,
               big.mark = ".",
               decimal.mark = ","
             ),
             showcase = shiny::icon("layer-group"),
             theme = "info"
           ),
-          bslib::value_box("Anos", paste0(min(result$raster_index$year), "–", max(result$raster_index$year)), showcase = shiny::icon("calendar"), theme = "success"),
-          bslib::value_box("Rasters", nrow(result$raster_index), showcase = shiny::icon("images"), theme = "warning")
+          bslib::value_box("Anos", paste0(year_min, "–", year_max), showcase = shiny::icon("calendar"), theme = "success"),
+          bslib::value_box("Rasters", nrow(result$raster_index %||% data.frame()), showcase = shiny::icon("images"), theme = "warning")
         )
       )
     })
 
     output$result_table <- DT::renderDT({
       data <- selected_result_data()
+      table_data <- result_table_data(data)
       DT::datatable(
-        sf::st_drop_geometry(data),
+        table_data,
         rownames = FALSE,
         filter = "top",
         extensions = "Buttons",
@@ -677,6 +703,7 @@ analysis_server <- function(id) {
           dom = "Bfrtip",
           buttons = list(
             list(
+              extend = "copy",
               text = "Download resultados (.zip)",
               className = "btn-download-results",
               action = DT::JS(sprintf(

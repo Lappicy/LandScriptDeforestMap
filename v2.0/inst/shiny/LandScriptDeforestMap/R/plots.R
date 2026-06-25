@@ -300,6 +300,9 @@ mesh.map <- function(
   )
   map_data$.MapClass <- factor(map_data$.MapClass, levels = labels)
   col.used <- stats::setNames(col.used, labels)
+  legend_fills <- unname(col.used[labels])
+  legend_seed <- map_data[rep(1L, length(labels)), , drop = FALSE]
+  legend_seed$.MapClass <- factor(labels, levels = labels)
 
   outline <- sf::st_sf(geometry = sf::st_sfc(
     suppressWarnings(sf::st_union(sf::st_geometry(map_data))),
@@ -328,6 +331,14 @@ mesh.map <- function(
       color = grid.color,
       linewidth = 0.18,
       alpha = max(0, min(1, fill.alpha))
+    ) +
+    ggplot2::geom_sf(
+      data = legend_seed,
+      ggplot2::aes(fill = .data$.MapClass),
+      color = NA,
+      linewidth = 0,
+      alpha = 0,
+      show.legend = TRUE
     ) +
     ggplot2::geom_sf(data = outline, fill = NA, color = "#17212b", linewidth = 0.7) +
     ggplot2::scale_fill_manual(
@@ -370,7 +381,12 @@ mesh.map <- function(
     ggplot2::theme_bw(base_size = 11) +
     ggplot2::guides(
       fill = ggplot2::guide_legend(
-        override.aes = list(colour = "black", linewidth = 0.6, alpha = 1)
+        override.aes = list(
+          fill = legend_fills,
+          colour = "black",
+          linewidth = 0.6,
+          alpha = 1
+        )
       )
     ) +
     ggplot2::theme(

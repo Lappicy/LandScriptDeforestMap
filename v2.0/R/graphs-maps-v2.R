@@ -265,6 +265,13 @@ mesh.map <- function(mesh.data,
       mesh.data$Value_Class <- factor(mesh.data$Value_Class,
                                       levels = seq_along(col.used.label),
                                       labels = col.used.breaks)
+
+      # Invisible layer used only to keep every legend color visible,
+      # even when a class has no cells in the current map.
+      legend.seed <- mesh.data[rep(1L, length(col.used.breaks)), , drop = FALSE]
+      legend.seed$Value_Class <- factor(col.used.breaks,
+                                        levels = col.used.breaks,
+                                        labels = col.used.breaks)
     }
   })
   
@@ -279,6 +286,11 @@ mesh.map <- function(mesh.data,
     
     # Plot the choosen class
     geom_sf(data = mesh.data, aes(fill = Value_Class), color = grid.color) +
+
+    # Seed every class in the legend without changing the visible map
+    {if(exists("legend.seed")){
+      geom_sf(data = legend.seed, aes(fill = Value_Class),
+              color = NA, alpha = 0, show.legend = TRUE)}} +
     
     # Plot the study mask if it exists
     {if(extra.masks){
@@ -340,7 +352,20 @@ mesh.map <- function(mesh.data,
           legend.spacing.y = unit(0.5, "cm"),
           axis.text.x = element_text(color = "black"),
           axis.text.y = element_text(color = "black")) +
-    guides(fill = guide_legend(byrow = TRUE))
+    guides(fill = {
+      if(all(c(exists("col.limits"), exists("col.used"), exists("col.used.breaks")))){
+        guide_legend(
+          byrow = TRUE,
+          override.aes = list(
+            fill = unname(stats::setNames(col.used, col.used.breaks)[col.used.breaks]),
+            colour = "black",
+            alpha = 1
+          )
+        )
+      } else {
+        guide_legend(byrow = TRUE)
+      }
+    })
   
   
   # Save graph (if not NULL) ####
