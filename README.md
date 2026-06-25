@@ -11,13 +11,61 @@ Este repositório mantém duas versões instaláveis e independentes:
 Cada pasta contém um pacote R completo. Por isso, a versão desejada deve ser
 informada no argumento `subdir`.
 
-## Instalação da versão 2.0 (mais atual)
+## Instalação passo a passo
+
+### 1. Instalar o R
+
+Baixe e instale o R pelo site oficial do CRAN:
+
+- Windows: <https://cran.r-project.org/bin/windows/base/>
+- macOS: <https://cran.r-project.org/bin/macosx/>
+
+Recomenda-se usar uma versão recente do R. A versão `v2.0` do pacote declara
+`R >= 4.3.0`.
+
+### 2. Windows: instalar o Rtools
+
+No Windows, instale também o Rtools, porque alguns pacotes podem precisar ser
+compilados durante a instalação.
+
+Baixe pelo site oficial:
+
+<https://cran.r-project.org/bin/windows/Rtools/>
+
+Escolha o Rtools compatível com a sua versão do R. Por exemplo:
+
+- R 4.5.x ou superior indicado pela página do CRAN: Rtools 4.5;
+- R 4.4.x: Rtools 4.4;
+- R 4.3.x: Rtools 4.3.
+
+Depois de instalar, reinicie o R/RStudio.
+
+### 3. macOS
+
+No macOS, não existe Rtools. Para a instalação normal usando pacotes binários do
+CRAN, geralmente não é necessário instalar ferramentas extras.
+
+Se algum pacote precisar ser compilado a partir do código-fonte, o CRAN informa
+que pode ser necessário instalar ferramentas de desenvolvimento como Xcode e
+compilador Fortran:
+
+<https://cran.r-project.org/bin/macosx/tools/>
+
+### 4. Instalar o pacote `remotes`
+
+Abra o R ou RStudio e execute:
 
 ```r
-install.packages("remotes")
+install.packages("remotes", repos = "https://cloud.r-project.org")
+```
+
+### 5. Instalar a versão 2.0 (mais atual)
+
+```r
 remotes::install_github(
   "Lappicy/LandScriptDeforestMap",
-  subdir = "v2.0"
+  subdir = "v2.0",
+  upgrade = "never"
 )
 
 library(LandScriptDeforestMap)
@@ -34,10 +82,10 @@ LandScriptDeforestMap::runLandScriptApp()
 Na hora de instalar, basta substituir o subdiretório para a versão desejada (como "v1.0" por exemplo)
 
 ```r
-install.packages("remotes")
 remotes::install_github(
   "Lappicy/LandScriptDeforestMap",
-  subdir = "v1.0"
+  subdir = "v1.0",
+  upgrade = "never"
 )
 
 library(LandScriptDeforestMap)
