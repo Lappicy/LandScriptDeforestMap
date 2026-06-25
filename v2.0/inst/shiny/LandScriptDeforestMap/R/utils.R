@@ -11,7 +11,7 @@ required_packages <- function() {
     "shiny", "bslib", "leaflet", "sf", "terra", "dplyr", "tidyr",
     "ggplot2", "ggspatial", "DT", "callr", "processx", "jsonlite",
     "zip", "htmltools", "scales", "shinyFiles", "writexl", "rosm",
-    "prettymapr"
+    "prettymapr", "later"
   )
 }
 
@@ -162,7 +162,7 @@ raster_pixel_area_from_raster <- function(raster, label = "raster") {
   as.numeric(area)
 }
 
-normalize_pixel_area_km2 <- function(area, tolerance = 0.03) {
+normalize_pixel_area_km2 <- function(area, tolerance = 0.05) {
   if (length(area) != 1L || !is.finite(area) || area <= 0) {
     stop("A área do pixel deve ser um número positivo.", call. = FALSE)
   }
@@ -205,9 +205,15 @@ report_progress <- function(progress, percent, stage, detail = NULL, status = "r
 }
 
 inspect_raster_folder <- function(folder, progress = NULL) {
-  report_progress(progress, 0, "Listando rasters", "Procurando arquivos .tif na pasta selecionada.")
+  report_progress(progress, 2, "Carregando arquivos", "Procurando rasters na pasta selecionada.")
   index <- list_raster_files(folder)
   total <- nrow(index)
+  report_progress(
+    progress,
+    5,
+    "Carregando arquivos",
+    paste0("Foram encontrados ", total, " arquivo(s) raster. Iniciando leitura.")
+  )
   metadata <- vector("list", total)
 
   for (i in seq_len(total)) {
@@ -590,6 +596,63 @@ select_preferred_result_file <- function(files) {
     "o arquivo RDS completo ou a tabela completa.",
     call. = FALSE
   )
+}
+
+prepare_result_download_zip <- function(result, destination) {
+  if (is.null(result) || is.null(result$files) || !length(result$files)) {
+    stop("Nenhum resultado está disponível para download.", call. = FALSE)
+  }
+
+  files <- unname(result$files[file.exists(result$files)])
+  files <- normalizePath(files, mustWork = TRUE)
+  files <- files[file.info(files)$isdir %in% FALSE]
+  if (!length(files)) {
+    stop("Os arquivos de resultado não foram encontrados para montar o ZIP.", call. = FALSE)
+  }
+
+  staging <- tempfile("landscript_results_zip_")
+  dir.create(staging, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(staging, recursive = TRUE, force = TRUE), add = TRUE)
+
+  output_root <- normalizePath(result$output_folder %||% dirname(files[[1]]), mustWork = FALSE)
+  file_names <- basename(files)
+  if (anyDuplicated(file_names)) {
+    file_names <- make.unique(file_names, sep = "_")
+  }
+
+  copied <- file.copy(
+    from = files,
+    to = file.path(staging, file_names),
+    overwrite = TRUE,
+    copy.mode = FALSE
+  )
+  if (!all(copied)) {
+    failed <- basename(files[!copied])
+    stop("Não foi possível copiar para o ZIP: ", paste(failed, collapse = ", "), call. = FALSE)
+  }
+
+  manifest <- file.path(staging, "README_resultados.txt")
+  writeLines(
+    c(
+      "LandScriptDeforestMap - resultados da análise",
+      paste0("Nome da análise: ", result$output_name %||% "LandScript_result"),
+      paste0("Pasta original de saída: ", output_root),
+      "",
+      "Arquivos incluídos:",
+      paste0("- ", sort(list.files(staging)))
+    ),
+    manifest,
+    useBytes = TRUE
+  )
+
+  zip_files <- list.files(staging, all.files = FALSE, recursive = FALSE)
+  zip::zipr(destination, files = zip_files, root = staging)
+
+  if (!file.exists(destination) || is.na(file.info(destination)$size) || file.info(destination)$size <= 0) {
+    stop("O ZIP de resultados foi criado vazio.", call. = FALSE)
+  }
+
+  invisible(destination)
 }
 
 safe_unlink <- function(path) {

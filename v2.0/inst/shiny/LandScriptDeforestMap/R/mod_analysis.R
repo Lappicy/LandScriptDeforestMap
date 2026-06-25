@@ -160,6 +160,7 @@ analysis_server <- function(id) {
     pixel_area_value <- shiny::reactiveVal(NULL)
     pixel_area_summary <- shiny::reactiveVal("—")
     raster_folder_path <- shiny::reactiveVal("")
+    raster_validation_token <- shiny::reactiveVal(0L)
     running <- shiny::reactiveVal(FALSE)
     job_process <- shiny::reactiveVal(NULL)
     job_progress_file <- shiny::reactiveVal(NULL)
@@ -199,6 +200,28 @@ analysis_server <- function(id) {
       invisible(NULL)
     }
 
+    schedule_raster_validation <- function(path, token) {
+      run_validation <- function() {
+        if (!identical(token, raster_validation_token()) || !identical(path, raster_folder_path())) {
+          return(invisible(NULL))
+        }
+        tryCatch(
+          validate_rasters(),
+          error = function(e) {
+            if (identical(token, raster_validation_token())) {
+              raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
+            }
+          }
+        )
+      }
+
+      session$onFlushed(function() {
+        later::later(run_validation, delay = 0.15)
+      }, once = TRUE)
+
+      invisible(NULL)
+    }
+
     load_geospatial_file <- function(path, source_label = NULL) {
       geo <- read_geo(path)
       geo_path(path)
@@ -223,21 +246,24 @@ analysis_server <- function(id) {
     shiny::observeEvent(input$raster_folder_button, {
       selected <- shinyFiles::parseDirPath(directory_roots, input$raster_folder_button)
       if (length(selected) && nzchar(selected[[1]])) {
-        raster_folder_path(normalizePath(selected[[1]], mustWork = TRUE))
+        selected_path <- normalizePath(selected[[1]], mustWork = TRUE)
+        token <- raster_validation_token() + 1L
+        raster_validation_token(token)
+        raster_folder_path(selected_path)
         validation_state(NULL)
-        raster_validation_state(NULL)
         pixel_area_value(NULL)
         pixel_area_summary("—")
-        tryCatch(
-          validate_rasters(),
-          error = function(e) {
-            raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
-          }
+        set_raster_validation_progress(
+          1,
+          "Carregando arquivos",
+          "A pasta foi selecionada. Preparando leitura dos rasters."
         )
+        schedule_raster_validation(selected_path, token)
       }
     }, ignoreInit = TRUE)
 
     shiny::observeEvent(input$clear_raster_folder, {
+      raster_validation_token(raster_validation_token() + 1L)
       raster_folder_path("")
       validation_state(NULL)
       raster_validation_state(NULL)
@@ -350,10 +376,10 @@ analysis_server <- function(id) {
           leaflet::addPolygons(
             data = preview,
             fillColor = "#F6C344",
-            fillOpacity = 0.08,
-            color = "#FFD54F",
-            weight = 0.7,
-            opacity = 0.9,
+            fillOpacity = 0.06,
+            color = "#111111",
+            weight = 0.8,
+            opacity = 0.45,
             group = "Malha"
           )
       }
@@ -404,7 +430,7 @@ analysis_server <- function(id) {
     })
 
     validate_rasters <- function() {
-      set_raster_validation_progress(0, "Iniciando validação", "Preparando leitura da pasta de rasters.")
+      set_raster_validation_progress(1, "Carregando arquivos", "Acessando a pasta selecionada.")
       inspection <- inspect_raster_folder(
         raster_folder_path(),
         progress = set_raster_validation_progress
@@ -666,12 +692,16 @@ analysis_server <- function(id) {
           dom = "Bfrtip",
           buttons = list(
             list(
-              extend = "copy",
               text = "Download resultados (.zip)",
               className = "btn-download-results",
               action = DT::JS(sprintf(
                 "function(e, dt, node, config) {
-                   document.getElementById('%s').click();
+                   var link = document.getElementById('%s');
+                   if (link && link.href) {
+                     window.location.href = link.href;
+                   } else if (link) {
+                     link.click();
+                   }
                  }",
                 ns("download_all")
               ))
@@ -688,10 +718,13 @@ analysis_server <- function(id) {
     })
 
     output$download_all <- shiny::downloadHandler(
-      filename = function() paste0(analysis_result()$output_name, "_resultados.zip"),
+      filename = function() {
+        result <- analysis_result()
+        shiny::req(result)
+        paste0(result$output_name, "_resultados.zip")
+      },
       content = function(file) {
-        files <- unname(analysis_result()$files[file.exists(analysis_result()$files)])
-        zip::zipr(file, files = files, root = analysis_result()$output_folder)
+        prepare_result_download_zip(analysis_result(), file)
       }
     )
 

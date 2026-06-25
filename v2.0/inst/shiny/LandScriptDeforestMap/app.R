@@ -133,7 +133,44 @@ ui <- bslib::page_navbar(
          });
          Shiny.addCustomMessageHandler('landscript-reset', function(x) {
            window.location.reload();
-         });"
+         });
+         (function installLandScriptShinyFilesDblClickFix() {
+           if (window.__landscriptShinyFilesDblClickFixInstalled) {
+             return;
+           }
+           window.__landscriptShinyFilesDblClickFixInstalled = true;
+           document.addEventListener('dblclick', function(event) {
+             var target = event.target && event.target.nodeType === 1 ? event.target : event.target.parentElement;
+             var fileItem = target && target.closest ? target.closest('.sF-modalContainer .sF-file') : null;
+             if (!fileItem || !window.jQuery) {
+               return;
+             }
+             event.preventDefault();
+             event.stopPropagation();
+             if (event.stopImmediatePropagation) {
+               event.stopImmediatePropagation();
+             }
+             var $item = window.jQuery(fileItem);
+             var $modal = $item.closest('.sF-modalContainer');
+             if (!$modal.length) {
+               return;
+             }
+             $item.closest('.sF-fileList').find('.selected').removeClass('selected');
+             $item.addClass('selected');
+             var $selectButton = $modal.find('.sF-responseButtons #sF-selectButton');
+             if ($selectButton.length) {
+               $selectButton.prop('disabled', false);
+               $selectButton.trigger('click');
+             }
+             window.setTimeout(function() {
+               if ($modal.length && $modal.closest('body').length) {
+                 $modal.removeClass('in show').hide().remove();
+                 window.jQuery('.sF-modalBackdrop, .modal-backdrop').remove();
+                 window.jQuery('body').removeClass('modal-open').css('padding-right', '');
+               }
+             }, 350);
+           }, true);
+         })();"
       ))
     )
   ),

@@ -200,7 +200,7 @@ mesh.map <- function(
   year.used = "all",
   col.limits = c(0, 1, 2, 5),
   col.used = c("white", "#E5E200", "#FC780D", "red", "darkred"),
-  grid.color = "transparent",
+  grid.color = "#17212B66",
   classes.column = NULL,
   highlight = NULL,
   title = NULL,
@@ -324,7 +324,7 @@ mesh.map <- function(
       data = map_data,
       ggplot2::aes(fill = .data$.MapClass),
       color = grid.color,
-      linewidth = 0.15,
+      linewidth = 0.18,
       alpha = max(0, min(1, fill.alpha))
     ) +
     ggplot2::geom_sf(data = outline, fill = NA, color = "#17212b", linewidth = 0.7) +

@@ -197,6 +197,29 @@ write_result_layers <- function(path, layers, simplified = FALSE) {
   normalizePath(path, mustWork = TRUE)
 }
 
+result_excel_sheets <- function(layers, simplified = FALSE) {
+  sheet_names <- c(
+    mesh = "Malha",
+    groups = "Grupos",
+    total = "Total"
+  )
+  sheets <- lapply(layers, function(object) {
+    if (simplified) object <- drop_raw_class_columns(object)
+    sf::st_drop_geometry(object)
+  })
+  names(sheets) <- unname(sheet_names[names(sheets)] %||% names(sheets))
+  sheets
+}
+
+write_result_workbook <- function(path, layers, simplified = FALSE) {
+  if (file.exists(path)) unlink(path)
+  writexl::write_xlsx(
+    result_excel_sheets(layers, simplified = simplified),
+    path
+  )
+  normalizePath(path, mustWork = TRUE)
+}
+
 run_land_analysis <- function(params, progress_file = NULL) {
   progress <- function(percent, stage, detail = NULL, status = "running") {
     if (!is.null(progress_file)) {
@@ -330,14 +353,8 @@ run_land_analysis <- function(params, progress_file = NULL) {
   )
   write_result_layers(complete_gpkg, layers, simplified = FALSE)
   write_result_layers(simplified_gpkg, layers, simplified = TRUE)
-  writexl::write_xlsx(
-    lapply(layers, sf::st_drop_geometry),
-    complete_xlsx
-  )
-  writexl::write_xlsx(
-    lapply(layers, function(x) sf::st_drop_geometry(drop_raw_class_columns(x))),
-    simplified_xlsx
-  )
+  write_result_workbook(complete_xlsx, layers, simplified = FALSE)
+  write_result_workbook(simplified_xlsx, layers, simplified = TRUE)
 
   result <- list(
     mesh = unit_results,

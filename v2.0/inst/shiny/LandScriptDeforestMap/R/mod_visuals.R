@@ -341,7 +341,7 @@ visuals_server <- function(id, automatic_result) {
         year.used = input$map_years %||% "all",
         col.limits = parse_number_vector(input$map_limits),
         col.used = parse_color_vector(input$map_colors, minimum = 2),
-        grid.color = "transparent",
+        grid.color = "#17212B66",
         classes.column = input$map_group,
         highlight = input$highlight,
         title = if (nzchar(trimws(input$map_title %||% ""))) input$map_title else NULL,
