@@ -133,67 +133,7 @@ ui <- bslib::page_navbar(
          });
          Shiny.addCustomMessageHandler('landscript-reset', function(x) {
            window.location.reload();
-         });
-         (function installLandScriptShinyFilesDblClickFix() {
-           if (window.__landscriptShinyFilesDblClickFixInstalled) {
-             return;
-           }
-           window.__landscriptShinyFilesDblClickFixInstalled = true;
-           function closeShinyFilesModal(modal) {
-             if (!window.jQuery) {
-               return;
-             }
-             var $ = window.jQuery;
-             var $modal = modal ? $(modal) : $('.sF-modalContainer');
-             var $button = $modal.data('button');
-             $modal.removeClass('in show').attr('aria-hidden', 'true').hide().remove();
-             $('.sF-modalBackdrop, .modal-backdrop').remove();
-             $('body').removeClass('modal-open').css({ 'padding-right': '', 'overflow': '' });
-             if ($button && $button.length) {
-               $button.prop('disabled', false).data('modal', null);
-             }
-           }
-           function closeShinyFilesModalSoon(modal) {
-             window.setTimeout(function() { closeShinyFilesModal(modal); }, 60);
-             window.setTimeout(function() { closeShinyFilesModal(modal); }, 350);
-             window.setTimeout(function() { closeShinyFilesModal(modal); }, 900);
-           }
-           document.addEventListener('dblclick', function(event) {
-             var target = event.target && event.target.nodeType === 1 ? event.target : event.target.parentElement;
-             var fileItem = target && target.closest ? target.closest('.sF-modalContainer .sF-file') : null;
-             if (!fileItem || !window.jQuery) {
-               return;
-             }
-             event.preventDefault();
-             event.stopPropagation();
-             if (event.stopImmediatePropagation) {
-               event.stopImmediatePropagation();
-             }
-             var $item = window.jQuery(fileItem);
-             var $modal = $item.closest('.sF-modalContainer');
-             if (!$modal.length) {
-               return;
-             }
-             $item.closest('.sF-fileList').find('.selected').removeClass('selected');
-             $item.addClass('selected');
-             var $selectButton = $modal.find('.sF-responseButtons #sF-selectButton');
-             if ($selectButton.length) {
-               $selectButton.prop('disabled', false);
-               $selectButton.trigger('click');
-             }
-             closeShinyFilesModalSoon($modal);
-           }, true);
-           if (window.jQuery) {
-             window.jQuery(document).on('click.landscriptShinyFilesSelect', '.sF-modalContainer .sF-responseButtons #sF-selectButton', function() {
-               closeShinyFilesModalSoon(window.jQuery(this).closest('.sF-modalContainer'));
-             });
-             window.jQuery(document).on('shiny:inputchanged.landscriptShinyFilesClose', function(event) {
-               if (event && event.name && event.name.indexOf('geo_file_button') !== -1) {
-                 closeShinyFilesModalSoon();
-               }
-             });
-           }
-         })();"
+         });"
       ))
     )
   ),

@@ -70,6 +70,44 @@ body {
   background: #d9e3e0;
 }
 
+.geo-upload-dropzone {
+  margin-bottom: 0.35rem;
+}
+
+.geo-upload-dropzone .form-label {
+  display: none;
+}
+
+.geo-upload-dropzone .input-group {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.geo-upload-dropzone .btn {
+  width: 100%;
+  border: 0;
+  border-radius: 0.55rem !important;
+  background: var(--ls-accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.geo-upload-dropzone .form-control {
+  min-height: 4.4rem;
+  border: 2px dashed rgba(23, 107, 91, 0.38);
+  border-radius: 0.7rem !important;
+  background: rgba(23, 107, 91, 0.045);
+  color: var(--ls-muted);
+  cursor: pointer;
+}
+
+.geo-upload-dropzone .form-control:hover,
+.geo-upload-dropzone .form-control:focus {
+  border-color: var(--ls-accent);
+  background: rgba(23, 107, 91, 0.08);
+  box-shadow: 0 0 0 0.18rem rgba(23, 107, 91, 0.12);
+}
+
 .progress-status {
   display: grid;
   gap: 0.2rem;

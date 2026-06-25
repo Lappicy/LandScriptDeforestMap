@@ -13,17 +13,25 @@ analysis_ui <- function(id) {
           value = "step_geo",
           shiny::tags$label(
             class = "control-label",
-            `for` = ns("geo_file_button"),
+            `for` = ns("geo_upload"),
             "GeoPackage, shapefile ou GeoJSON"
           ),
-          shinyFiles::shinyFilesButton(
-            ns("geo_file_button"),
-            label = "Selecionar arquivo…",
-            title = "Selecione um GeoPackage, shapefile, GeoJSON ou ZIP",
-            multiple = FALSE,
-            buttonType = "primary",
-            class = "btn w-100"
+          shiny::div(
+            class = "geo-upload-dropzone",
+            shiny::fileInput(
+              ns("geo_upload"),
+              label = "",
+              multiple = TRUE,
+              accept = c(
+                ".gpkg", ".geojson", ".json", ".zip",
+                ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj", ".sbn", ".sbx",
+                ".kml", ".gml"
+              ),
+              buttonLabel = "Selecionar ou arrastar arquivo(s)",
+              placeholder = "Solte aqui o GeoPackage, GeoJSON, ZIP ou shapefile completo"
+            ),
           ),
+          shiny::helpText("Para shapefile, envie um .zip ou selecione/arraste .shp, .shx, .dbf e .prj juntos."),
           shiny::selectInput(ns("group_column"), "Coluna de limites/grupos", choices = NULL)
         ),
         bslib::accordion_panel(
@@ -180,15 +188,6 @@ analysis_server <- function(id) {
       defaultRoot = "Pasta pessoal",
       allowDirCreate = FALSE
     )
-    shinyFiles::shinyFileChoose(
-      input,
-      "geo_file_button",
-      roots = directory_roots,
-      session = session,
-      defaultRoot = "Pasta pessoal",
-      filetypes = c("", "gpkg", "geojson", "json", "zip", "shp", "kml", "gml")
-    )
-
     set_raster_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
       raster_validation_state(list(
         status = status,
@@ -287,13 +286,13 @@ analysis_server <- function(id) {
       )
     })
 
-    shiny::observeEvent(input$geo_file_button, {
+    shiny::observeEvent(input$geo_upload, {
       tryCatch({
-        selected <- shinyFiles::parseFilePaths(directory_roots, input$geo_file_button)
-        if (!nrow(selected)) return(NULL)
+        upload <- input$geo_upload
+        if (is.null(upload) || !nrow(upload)) return(NULL)
         upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
-        path <- stage_local_vector(selected$datapath[[1]], upload_dir)
-        load_geospatial_file(path, basename(selected$datapath[[1]]))
+        path <- stage_uploaded_vector(upload, upload_dir)
+        load_geospatial_file(path, paste(upload$name, collapse = ", "))
       }, error = function(e) {
         geo_path(NULL)
         geo_data(NULL)

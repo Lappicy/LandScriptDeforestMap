@@ -298,6 +298,8 @@ mesh.map <- function(
     include.lowest = TRUE,
     right = TRUE
   )
+  map_data$.MapClass <- factor(map_data$.MapClass, levels = labels)
+  col.used <- stats::setNames(col.used, labels)
 
   outline <- sf::st_sf(geometry = sf::st_sfc(
     suppressWarnings(sf::st_union(sf::st_geometry(map_data))),
@@ -328,7 +330,14 @@ mesh.map <- function(
       alpha = max(0, min(1, fill.alpha))
     ) +
     ggplot2::geom_sf(data = outline, fill = NA, color = "#17212b", linewidth = 0.7) +
-    ggplot2::scale_fill_manual(values = col.used, drop = FALSE, na.value = "grey85") +
+    ggplot2::scale_fill_manual(
+      values = col.used,
+      limits = labels,
+      breaks = labels,
+      drop = FALSE,
+      na.value = "grey85",
+      na.translate = FALSE
+    ) +
     ggplot2::labs(
       title = title %||% if (length(year.used) == 1L) {
         paste(class_label, text$in_year, year.used)

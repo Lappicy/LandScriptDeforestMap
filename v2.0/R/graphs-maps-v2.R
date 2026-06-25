@@ -252,9 +252,6 @@ mesh.map <- function(mesh.data,
         
       }
       
-      # Turn column into factor
-      mesh.data$Value_Class <- as.factor(mesh.data$Value_Class)
-      
       # Create label for ggplot2
       col.used.label <-
         c(paste0("No ", tolower(class)),
@@ -262,6 +259,12 @@ mesh.map <- function(mesh.data,
           bquote("Between " ~ .(col.limits[2]) ~ " and " ~ .(col.limits[3]) ~ km^{2}),
           bquote("Between " ~ .(col.limits[3]) ~ " and " ~ .(col.limits[4]) ~ km^{2}),
           bquote("More than " ~ .(col.limits[4]) ~ km^{2}))
+      
+      # Turn column into factor and preserve every legend class, even absent ones
+      col.used.breaks <- as.character(seq_along(col.used.label))
+      mesh.data$Value_Class <- factor(mesh.data$Value_Class,
+                                      levels = seq_along(col.used.label),
+                                      labels = col.used.breaks)
     }
   })
   
@@ -299,8 +302,11 @@ mesh.map <- function(mesh.data,
     
     # Class coloration if there are col.limits & col.used arguments
     {if(all(c(exists("col.limits"), exists("col.used")))){
-      scale_fill_manual(values = col.used,
-                        labels = col.used.label)}} +
+      scale_fill_manual(values = stats::setNames(col.used, col.used.breaks),
+                        limits = col.used.breaks,
+                        breaks = col.used.breaks,
+                        labels = col.used.label,
+                        drop = FALSE)}} +
     
     
     # Title for map, along with x and y axis and legend
