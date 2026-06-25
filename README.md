@@ -1,7 +1,6 @@
 # LandScriptDeforestMap
 
-Pacote R para avaliar desmatamento e mudanças de classes em imagens classificadas
-de sensoriamento remoto.
+Pacote R para avaliar desmatamento e mudanças de classes em imagens classificadas de sensoriamento remoto.
 
 Este repositório mantém duas versões instaláveis e independentes:
 
@@ -20,13 +19,12 @@ Baixe e instale o R pelo site oficial do CRAN:
 - Windows: <https://cran.r-project.org/bin/windows/base/>
 - macOS: <https://cran.r-project.org/bin/macosx/>
 
-Recomenda-se usar uma versão recente do R. A versão `v2.0` do pacote declara
-`R >= 4.3.0`.
+Recomenda-se usar uma versão recente do R. A versão `v2.0` do pacote necessita de uma versão mais atual que a 
+`4.3.0`.
 
 ### 2. Windows: instalar o Rtools
 
-No Windows, instale também o Rtools, porque alguns pacotes podem precisar ser
-compilados durante a instalação.
+No Windows, instale também o Rtools, porque alguns pacotes podem precisar ser compilados durante a instalação.
 
 Baixe pelo site oficial:
 
@@ -42,14 +40,7 @@ Depois de instalar, reinicie o R/RStudio.
 
 ### 3. macOS
 
-No macOS, não existe Rtools. Para a instalação normal usando pacotes binários do
-CRAN, geralmente não é necessário instalar ferramentas extras.
-
-Se algum pacote precisar ser compilado a partir do código-fonte, o CRAN informa
-que pode ser necessário instalar ferramentas de desenvolvimento como Xcode e
-compilador Fortran:
-
-<https://cran.r-project.org/bin/macosx/tools/>
+No macOS, não existe Rtools e, portanto, não necessita de nenhum download a mais.
 
 ### 4. Instalar o pacote `remotes`
 
@@ -64,8 +55,7 @@ install.packages("remotes", repos = "https://cloud.r-project.org")
 ```r
 remotes::install_github(
   "Lappicy/LandScriptDeforestMap",
-  subdir = "v2.0",
-  upgrade = "never"
+  subdir = "v2.0"
 )
 
 library(LandScriptDeforestMap)
@@ -77,15 +67,12 @@ Para iniciar a plataforma Shiny incluída na versão 2.0:
 LandScriptDeforestMap::runLandScriptApp()
 ```
 
-## Instalação de versões anteriores
-
-Na hora de instalar, basta substituir o subdiretório para a versão desejada (como "v1.0" por exemplo)
+Para instalar versões anteriores, basta substituir o subdiretório para a versão desejada (como "v1.0" por exemplo)
 
 ```r
 remotes::install_github(
   "Lappicy/LandScriptDeforestMap",
-  subdir = "v1.0",
-  upgrade = "never"
+  subdir = "v1.0"
 )
 
 library(LandScriptDeforestMap)
