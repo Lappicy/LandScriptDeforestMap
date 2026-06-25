@@ -376,10 +376,10 @@ analysis_server <- function(id) {
           leaflet::addPolygons(
             data = preview,
             fillColor = "#F6C344",
-            fillOpacity = 0.06,
-            color = "#111111",
-            weight = 0.8,
-            opacity = 0.45,
+            fillOpacity = 0.08,
+            color = "#FFD54F",
+            weight = 0.7,
+            opacity = 0.9,
             group = "Malha"
           )
       }
@@ -490,7 +490,7 @@ analysis_server <- function(id) {
           shiny::div(
             class = "progress-status raster-progress-status",
             shiny::strong(message$stage %||% "Validando rasters"),
-            shiny::small(class = "text-muted", message$detail %||% "")
+            shiny::tags$small(class = "text-muted", message$detail %||% "")
           ),
           shiny::div(
             class = "progress raster-progress",

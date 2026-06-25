@@ -139,6 +139,25 @@ ui <- bslib::page_navbar(
              return;
            }
            window.__landscriptShinyFilesDblClickFixInstalled = true;
+           function closeShinyFilesModal(modal) {
+             if (!window.jQuery) {
+               return;
+             }
+             var $ = window.jQuery;
+             var $modal = modal ? $(modal) : $('.sF-modalContainer');
+             var $button = $modal.data('button');
+             $modal.removeClass('in show').attr('aria-hidden', 'true').hide().remove();
+             $('.sF-modalBackdrop, .modal-backdrop').remove();
+             $('body').removeClass('modal-open').css({ 'padding-right': '', 'overflow': '' });
+             if ($button && $button.length) {
+               $button.prop('disabled', false).data('modal', null);
+             }
+           }
+           function closeShinyFilesModalSoon(modal) {
+             window.setTimeout(function() { closeShinyFilesModal(modal); }, 60);
+             window.setTimeout(function() { closeShinyFilesModal(modal); }, 350);
+             window.setTimeout(function() { closeShinyFilesModal(modal); }, 900);
+           }
            document.addEventListener('dblclick', function(event) {
              var target = event.target && event.target.nodeType === 1 ? event.target : event.target.parentElement;
              var fileItem = target && target.closest ? target.closest('.sF-modalContainer .sF-file') : null;
@@ -162,14 +181,18 @@ ui <- bslib::page_navbar(
                $selectButton.prop('disabled', false);
                $selectButton.trigger('click');
              }
-             window.setTimeout(function() {
-               if ($modal.length && $modal.closest('body').length) {
-                 $modal.removeClass('in show').hide().remove();
-                 window.jQuery('.sF-modalBackdrop, .modal-backdrop').remove();
-                 window.jQuery('body').removeClass('modal-open').css('padding-right', '');
-               }
-             }, 350);
+             closeShinyFilesModalSoon($modal);
            }, true);
+           if (window.jQuery) {
+             window.jQuery(document).on('click.landscriptShinyFilesSelect', '.sF-modalContainer .sF-responseButtons #sF-selectButton', function() {
+               closeShinyFilesModalSoon(window.jQuery(this).closest('.sF-modalContainer'));
+             });
+             window.jQuery(document).on('shiny:inputchanged.landscriptShinyFilesClose', function(event) {
+               if (event && event.name && event.name.indexOf('geo_file_button') !== -1) {
+                 closeShinyFilesModalSoon();
+               }
+             });
+           }
          })();"
       ))
     )
