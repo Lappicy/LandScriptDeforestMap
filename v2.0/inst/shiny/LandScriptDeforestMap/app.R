@@ -19,11 +19,7 @@ source(file.path(app_directory, "R", "plots.R"), local = globalenv())
 source(file.path(app_directory, "R", "mod_analysis.R"), local = globalenv())
 source(file.path(app_directory, "R", "mod_visuals.R"), local = globalenv())
 
-documents_directory <- normalizePath(
-  file.path(app_directory, "www", "documents"),
-  mustWork = TRUE
-)
-shiny::addResourcePath("documents", documents_directory)
+patent_certificate_href <- "landscript/INPI.pdf"
 
 theme <- bslib::bs_theme(
   version = 5,
@@ -71,7 +67,7 @@ citation_box <- function() {
         "Titulares: Thiago Lappicy Lemos Gomes, Carlos Hiroo Saito e Romero Gomes Pereira da Silva. ",
         shiny::a(
           "Consultar certificado",
-          href = "/documents/INPI.pdf",
+          href = patent_certificate_href,
           target = "_blank",
           rel = "noopener noreferrer"
         ),
@@ -86,6 +82,29 @@ citation_box <- function() {
   )
 }
 
+logo_footer <- function() {
+  shiny::div(
+    class = "institutional-footer",
+    shiny::div(
+      class = "institutional-footer-inner",
+      shiny::span(class = "institutional-footer-label", "Apoio institucional"),
+      shiny::div(
+        class = "institutional-logo-row",
+        shiny::img(src = "landscript/logos/unb.png", alt = "Universidade de Brasília (UnB)", class = "institutional-logo logo-unb"),
+        shiny::img(src = "landscript/logos/progysat.png", alt = "PROGYSAT", class = "institutional-logo logo-progysat"),
+        shiny::img(src = "landscript/logos/odisseia-inct.png", alt = "Odisseia INCT", class = "institutional-logo logo-odisseia")
+      )
+    )
+  )
+}
+
+app_footer <- function() {
+  shiny::tagList(
+    citation_box(),
+    logo_footer()
+  )
+}
+
 ui <- bslib::page_navbar(
   title = shiny::div(
     class = "brand-lockup",
@@ -95,7 +114,7 @@ ui <- bslib::page_navbar(
   theme = theme,
   fillable = FALSE,
   window_title = "LandScriptDeforestMap — Plataforma Shiny",
-  footer = citation_box(),
+  footer = app_footer(),
   header = shiny::tagList(
     shiny::useBusyIndicators(
       spinners = TRUE,
@@ -111,6 +130,9 @@ ui <- bslib::page_navbar(
              el.disabled = x.disabled;
              el.setAttribute('aria-disabled', x.disabled ? 'true' : 'false');
            }
+         });
+         Shiny.addCustomMessageHandler('landscript-reset', function(x) {
+           window.location.reload();
          });"
       ))
     )
@@ -154,10 +176,22 @@ ui <- bslib::page_navbar(
         )
       )
     )
+  ),
+  bslib::nav_item(
+    shiny::actionButton(
+      "reset_app",
+      "Resetar",
+      icon = shiny::icon("rotate-left"),
+      class = "btn-outline-light btn-sm reset-app-button"
+    )
   )
 )
 
 server <- function(input, output, session) {
+  shiny::observeEvent(input$reset_app, {
+    session$sendCustomMessage("landscript-reset", list())
+  }, ignoreInit = TRUE)
+
   result <- analysis_server("analysis")
   visuals_server("visuals", result)
 }

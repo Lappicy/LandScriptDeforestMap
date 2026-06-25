@@ -11,14 +11,20 @@ analysis_ui <- function(id) {
         bslib::accordion_panel(
           "1. Arquivo geoespacial",
           value = "step_geo",
-          shiny::fileInput(
-            ns("geo_upload"),
-            "GeoPackage, GeoJSON ou shapefile",
-            multiple = TRUE,
-            accept = c(".gpkg", ".geojson", ".json", ".shp", ".dbf", ".shx", ".prj", ".cpg")
+          shiny::tags$label(
+            class = "control-label",
+            `for` = ns("geo_file_button"),
+            "GeoPackage, shapefile ou GeoJSON"
           ),
-          shiny::selectInput(ns("group_column"), "Coluna de limites/grupos", choices = NULL),
-          shiny::helpText("As classes serão dissolvidas, recortadas pela malha e analisadas também em conjunto.")
+          shinyFiles::shinyFilesButton(
+            ns("geo_file_button"),
+            label = "Selecionar arquivo…",
+            title = "Selecione um GeoPackage, shapefile, GeoJSON ou ZIP",
+            multiple = FALSE,
+            buttonType = "primary",
+            class = "btn w-100"
+          ),
+          shiny::selectInput(ns("group_column"), "Coluna de limites/grupos", choices = NULL)
         ),
         bslib::accordion_panel(
           "2. Malha",
@@ -26,39 +32,18 @@ analysis_ui <- function(id) {
           shiny::checkboxInput(ns("no_mesh"), "Não criar malha", FALSE),
           shiny::conditionalPanel(
             condition = sprintf("!input['%s']", ns("no_mesh")),
-            shiny::numericInput(ns("mesh_size_meters"), "Tamanho da quadrícula (metros)", 5000, min = 1, step = 100),
+            shiny::numericInput(ns("mesh_size_km"), "Tamanho da quadrícula (km)", 5, min = 0.1, step = 0.1),
             shiny::sliderInput(
-              ns("mesh_size_slider"),
+              ns("mesh_size_slider_km"),
               "Ajuste por controle",
-              min = 100,
-              max = 100000,
-              value = 5000,
-              step = 100,
-              post = " m",
+              min = 0.1,
+              max = 100,
+              value = 5,
+              step = 0.1,
+              post = " km",
               ticks = FALSE
             ),
-            shiny::uiOutput(ns("mesh_conversion")),
-            shiny::tags$details(
-              class = "calculation-details",
-              shiny::tags$summary("Como é feita a conversão para graus?"),
-              shiny::p(
-                "A grade é realmente criada em metros, em uma projeção UTM local. ",
-                "Os valores em graus são apenas uma referência aproximada para o mapa."
-              ),
-              shiny::p(
-                "A conversão usa o centro da área de estudo. Um grau de latitude possui ",
-                "aproximadamente 111 km; o comprimento de um grau de longitude diminui ",
-                "com a latitude, segundo o cosseno da latitude. Por isso os valores de ",
-                "longitude e latitude não são exatamente iguais."
-              ),
-              shiny::p(
-                "Em termos simplificados: graus de latitude = metros ÷ metros por grau de ",
-                "latitude; graus de longitude = metros ÷ metros por grau de longitude. ",
-                "A aplicação usa as fórmulas elipsoidais do WGS 84, com termos de cosseno ",
-                "da latitude, em vez de assumir sempre 111.000 m por grau."
-              )
-            ),
-            shiny::helpText("A malha é criada em uma projeção métrica local e reprojetada para exibição no mapa.")
+            shiny::helpText("Obs: A malha é criada em uma projeção métrica local e reprojetada para exibição no mapa.")
           )
         ),
         bslib::accordion_panel(
@@ -102,28 +87,6 @@ analysis_ui <- function(id) {
             shiny::textInput(ns("class_pasture"), "Pastagem", "15"),
             shiny::textInput(ns("class_mining"), "Mineração", "30"),
             shiny::textInput(ns("class_urban"), "Urbano", "24")
-          ),
-          shiny::numericInput(ns("pixel_ratio"), "Área de um pixel (km²)", value = 30 * 30 / 1e6, min = 0.0000001, step = 0.000001),
-          shiny::uiOutput(ns("pixel_area_info")),
-          shiny::tags$details(
-            class = "calculation-details",
-            shiny::tags$summary("Como a área do pixel é calculada?"),
-            shiny::p(
-              "A aplicação lê a resolução e o sistema de coordenadas do raster. ",
-              "Em rasters projetados, a área vem das dimensões da célula. Em latitude/longitude, ",
-              "é calculada a área geodésica da célula central."
-            ),
-            shiny::p(
-              "Quando o resultado fica até 3% de uma resolução usual, ele é normalizado. ",
-              "Exemplo: 30 × 30 m = 900 m² = 0,0009 km². ",
-              "O campo acima permanece editável para você substituir o valor."
-            )
-          ),
-          shiny::actionButton(
-            ns("validate_inputs"),
-            "Validar rasters",
-            icon = shiny::icon("check-double"),
-            class = "btn-outline-primary w-100"
           ),
           shiny::uiOutput(ns("raster_validation_message"))
         ),
@@ -172,7 +135,12 @@ analysis_ui <- function(id) {
           ),
           DT::DTOutput(ns("result_table"))
         ),
-        shiny::uiOutput(ns("download_buttons"))
+        shiny::downloadButton(
+          ns("download_all"),
+          "Download resultados (.zip)",
+          class = "visually-hidden",
+          style = "display:none;"
+        )
       )
     )
   )
@@ -189,7 +157,8 @@ analysis_server <- function(id) {
     analysis_result <- shiny::reactiveVal(NULL)
     validation_state <- shiny::reactiveVal(NULL)
     raster_validation_state <- shiny::reactiveVal(NULL)
-    pixel_area_state <- shiny::reactiveVal(NULL)
+    pixel_area_value <- shiny::reactiveVal(NULL)
+    pixel_area_summary <- shiny::reactiveVal("—")
     raster_folder_path <- shiny::reactiveVal("")
     running <- shiny::reactiveVal(FALSE)
     job_process <- shiny::reactiveVal(NULL)
@@ -210,6 +179,46 @@ analysis_server <- function(id) {
       defaultRoot = "Pasta pessoal",
       allowDirCreate = FALSE
     )
+    shinyFiles::shinyFileChoose(
+      input,
+      "geo_file_button",
+      roots = directory_roots,
+      session = session,
+      defaultRoot = "Pasta pessoal",
+      filetypes = c("", "gpkg", "geojson", "json", "zip", "shp", "kml", "gml")
+    )
+
+    set_raster_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
+      raster_validation_state(list(
+        status = status,
+        percent = max(0, min(100, as.numeric(percent))),
+        stage = as.character(stage),
+        detail = as.character(detail %||% "")
+      ))
+      try(get("flushReact", asNamespace("shiny"))(), silent = TRUE)
+      invisible(NULL)
+    }
+
+    load_geospatial_file <- function(path, source_label = NULL) {
+      geo <- read_geo(path)
+      geo_path(path)
+      geo_data(geo)
+      columns <- names(sf::st_drop_geometry(geo))
+      shiny::updateSelectInput(
+        session,
+        "group_column",
+        choices = c("Toda a área (sem grupos)" = ".ALL", stats::setNames(columns, columns)),
+        selected = if (length(columns)) columns[[1]] else ".ALL"
+      )
+      validation_state(list(
+        type = "success",
+        text = paste0(
+          "Arquivo geoespacial carregado com sucesso",
+          if (!is.null(source_label) && nzchar(source_label)) paste0(": ", source_label) else "",
+          "."
+        )
+      ))
+    }
 
     shiny::observeEvent(input$raster_folder_button, {
       selected <- shinyFiles::parseDirPath(directory_roots, input$raster_folder_button)
@@ -217,35 +226,14 @@ analysis_server <- function(id) {
         raster_folder_path(normalizePath(selected[[1]], mustWork = TRUE))
         validation_state(NULL)
         raster_validation_state(NULL)
-        tryCatch({
-          index <- list_raster_files(selected[[1]])
-          raw_pixel_area <- raster_pixel_area_km2(index$path[[1]])
-          pixel_area <- normalize_pixel_area_km2(raw_pixel_area)
-          shiny::updateNumericInput(session, "pixel_ratio", value = pixel_area$value)
-          pixel_area_state(list(
-            type = "info",
-            text = paste0(
-              "Área calculada no primeiro raster: ",
-              format(raw_pixel_area, scientific = FALSE, digits = 8), " km². ",
-              if (pixel_area$standardized) {
-                paste0(
-                  "Valor utilizado: ", format(pixel_area$value, scientific = FALSE),
-                  " km² (padrão ", pixel_area$standard_label, ")."
-                )
-              } else {
-                paste0("Esse valor foi mantido sem arredondamento.")
-              }
-            )
-          ))
-        }, error = function(e) {
-          pixel_area_state(list(
-            type = "warning",
-            text = paste0(
-              "Não foi possível detectar automaticamente a área do pixel. ",
-              "O valor continua editável. Detalhe: ", conditionMessage(e)
-            )
-          ))
-        })
+        pixel_area_value(NULL)
+        pixel_area_summary("—")
+        tryCatch(
+          validate_rasters(),
+          error = function(e) {
+            raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
+          }
+        )
       }
     }, ignoreInit = TRUE)
 
@@ -253,7 +241,8 @@ analysis_server <- function(id) {
       raster_folder_path("")
       validation_state(NULL)
       raster_validation_state(NULL)
-      pixel_area_state(NULL)
+      pixel_area_value(NULL)
+      pixel_area_summary("—")
     })
 
     output$raster_folder_display <- shiny::renderUI({
@@ -272,21 +261,13 @@ analysis_server <- function(id) {
       )
     })
 
-    shiny::observeEvent(input$geo_upload, {
+    shiny::observeEvent(input$geo_file_button, {
       tryCatch({
+        selected <- shinyFiles::parseFilePaths(directory_roots, input$geo_file_button)
+        if (!nrow(selected)) return(NULL)
         upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
-        path <- stage_uploaded_vector(input$geo_upload, upload_dir)
-        geo <- read_geo(path)
-        geo_path(path)
-        geo_data(geo)
-        columns <- names(sf::st_drop_geometry(geo))
-        shiny::updateSelectInput(
-          session,
-          "group_column",
-          choices = c("Toda a área (sem grupos)" = ".ALL", stats::setNames(columns, columns)),
-          selected = if (length(columns)) columns[[1]] else ".ALL"
-        )
-        validation_state(list(type = "success", text = "Arquivo geoespacial carregado com sucesso."))
+        path <- stage_local_vector(selected$datapath[[1]], upload_dir)
+        load_geospatial_file(path, basename(selected$datapath[[1]]))
       }, error = function(e) {
         geo_path(NULL)
         geo_data(NULL)
@@ -294,64 +275,39 @@ analysis_server <- function(id) {
       })
     }, ignoreInit = TRUE)
 
-    shiny::observeEvent(input$mesh_size_meters, {
-      value <- input$mesh_size_meters
+    shiny::observeEvent(input$mesh_size_km, {
+      value <- input$mesh_size_km
       if (!is.null(value) && is.finite(value) && value > 0 &&
-          !isTRUE(all.equal(value, input$mesh_size_slider))) {
+          !isTRUE(all.equal(value, input$mesh_size_slider_km))) {
         shiny::updateSliderInput(
           session,
-          "mesh_size_slider",
-          min = min(1, value),
-          max = max(100000, value),
+          "mesh_size_slider_km",
+          min = min(0.1, value),
+          max = max(100, value),
           value = value
         )
       }
     }, ignoreInit = TRUE)
 
-    shiny::observeEvent(input$mesh_size_slider, {
-      value <- input$mesh_size_slider
-      if (!is.null(value) && !isTRUE(all.equal(value, input$mesh_size_meters))) {
-        shiny::updateNumericInput(session, "mesh_size_meters", value = value)
+    shiny::observeEvent(input$mesh_size_slider_km, {
+      value <- input$mesh_size_slider_km
+      if (!is.null(value) && !isTRUE(all.equal(value, input$mesh_size_km))) {
+        shiny::updateNumericInput(session, "mesh_size_km", value = value)
       }
     }, ignoreInit = TRUE)
 
     mesh_size_debounced <- shiny::debounce(
-      shiny::reactive(input$mesh_size_meters),
+      shiny::reactive(input$mesh_size_km),
       millis = 650
     )
-
-    output$mesh_conversion <- shiny::renderUI({
-      value <- input$mesh_size_meters
-      if (isTRUE(input$no_mesh) || is.null(value) || !is.finite(value) || value <= 0) return(NULL)
-      conversion <- meters_to_degree_equivalent(value, geo_data())
-      shiny::div(
-        class = "mesh-conversion",
-        shiny::icon("ruler-combined"),
-        shiny::div(
-          shiny::strong(format(round(value, 2), big.mark = ".", decimal.mark = ","), " metros"),
-          shiny::br(),
-          shiny::span(
-            paste0(
-              "≈ ", format(conversion$longitude_degrees, digits = 5, decimal.mark = ","),
-              "° longitude × ",
-              format(conversion$latitude_degrees, digits = 5, decimal.mark = ","),
-              "° latitude",
-              if (is.finite(conversion$latitude)) {
-                paste0(" (na latitude ", format(round(conversion$latitude, 3), decimal.mark = ","), "°)")
-              } else ""
-            ),
-            class = "text-muted small"
-          )
-        )
-      )
-    })
 
     preview_mesh <- shiny::reactive({
       geo <- geo_data()
       shiny::req(geo)
       if (!isTRUE(input$no_mesh)) {
-        size <- mesh_size_debounced()
-        shiny::validate(shiny::need(!is.null(size) && is.finite(size) && size > 0, "O tamanho da malha deve ser positivo."))
+        size_km <- mesh_size_debounced()
+        shiny::validate(shiny::need(!is.null(size_km) && is.finite(size_km) && size_km > 0, "O tamanho da malha deve ser positivo."))
+        size <- size_km * 1000
       } else {
         size <- NULL
       }
@@ -412,7 +368,14 @@ analysis_server <- function(id) {
 
     output$geo_summary <- shiny::renderTable({
       shiny::req(geo_data())
-      geo_summary(geo_data())
+      rbind(
+        geo_summary(geo_data()),
+        data.frame(
+          item = "Área do pixel estimada",
+          value = pixel_area_summary(),
+          stringsAsFactors = FALSE
+        )
+      )
     }, striped = TRUE, bordered = FALSE, spacing = "s")
 
     output$attribute_table <- DT::renderDT({
@@ -440,86 +403,83 @@ analysis_server <- function(id) {
       lapply(values, parse_number_vector, integer = TRUE)
     })
 
-    output$pixel_area_info <- shiny::renderUI({
-      state <- pixel_area_state()
-      if (is.null(state)) {
-        return(shiny::div(
-          class = "field-hint",
-          "Esse valor será detectado automaticamente quando uma pasta de rasters for selecionada."
-        ))
-      }
-      app_alert(state$text, color = state$type)
-    })
-
     validate_rasters <- function() {
-      inspection <- inspect_raster_folder(raster_folder_path())
-      shiny::updateNumericInput(
-        session,
-        "pixel_ratio",
-        value = signif(inspection$pixel_area_km2, 8)
+      set_raster_validation_progress(0, "Iniciando validação", "Preparando leitura da pasta de rasters.")
+      inspection <- inspect_raster_folder(
+        raster_folder_path(),
+        progress = set_raster_validation_progress
       )
-      pixel_area_state(list(
-        type = "success",
+      pixel_area_value(inspection$pixel_area_km2)
+      pixel_area_summary(paste0(
+        format(inspection$pixel_area_km2, scientific = FALSE, digits = 8, decimal.mark = ","),
+        " km²",
+        if (isTRUE(inspection$pixel_area_standardized)) {
+          paste0(" (", inspection$pixel_area_standard_label, ")")
+        } else {
+          ""
+        }
+      ))
+      consistency <- c(
+        if (inspection$same_crs) "CRS consistente" else "CRS diferentes",
+        if (inspection$same_resolution) "resolução consistente" else "resoluções diferentes"
+      )
+      raster_validation_state(list(
+        status = if (inspection$same_crs && inspection$same_resolution) "complete" else "warning",
+        percent = 100,
+        type = if (inspection$same_crs && inspection$same_resolution) "success" else "warning",
         text = paste0(
-          "Área mediana calculada: ",
-          format(inspection$pixel_area_km2_raw, scientific = FALSE, digits = 8),
-          " km². Valor utilizado: ",
-          format(inspection$pixel_area_km2, scientific = FALSE),
-          " km²",
-          if (isTRUE(inspection$pixel_area_standardized)) {
-            paste0(" (normalizado para ", inspection$pixel_area_standard_label, ").")
-          } else {
-            "."
-          }
+          "Validação concluída: ", inspection$count, " raster(s), anos ",
+          inspection$years[[1]], "–", inspection$years[[2]], "; ",
+          paste(consistency, collapse = "; "), ". Resolução: ",
+          paste(format(inspection$resolution, digits = 7), collapse = " × "), "."
         )
       ))
+      try(get("flushReact", asNamespace("shiny"))(), silent = TRUE)
       inspection
     }
 
     validate_parameters <- function() {
       shiny::req(geo_path(), geo_data())
       if (!isTRUE(input$no_mesh) &&
-          (is.null(input$mesh_size_meters) || !is.finite(input$mesh_size_meters) || input$mesh_size_meters <= 0)) {
+          (is.null(input$mesh_size_km) || !is.finite(input$mesh_size_km) || input$mesh_size_km <= 0)) {
         stop("O tamanho da malha deve ser um número positivo.", call. = FALSE)
       }
       rasters <- list_raster_files(raster_folder_path())
       output_folder <- ensure_output_folder(input$output_folder)
-      if (is.null(input$pixel_ratio) || input$pixel_ratio <= 0) {
-        stop("A área por pixel deve ser positiva.", call. = FALSE)
+      if (is.null(pixel_area_value()) || !is.finite(pixel_area_value()) || pixel_area_value() <= 0) {
+        stop("Selecione uma pasta de rasters válida para estimar a área do pixel.", call. = FALSE)
       }
       mapbiomas_class_map(input$mapbiomas, custom_classes())
       list(rasters = rasters, output_folder = output_folder)
     }
 
-    shiny::observeEvent(input$validate_inputs, {
-      tryCatch({
-        inspection <- shiny::withProgress(
-          expr = validate_rasters(),
-          message = "Validando rasters",
-          detail = "Lendo metadados, CRS, resolução e área dos pixels…",
-          value = 0.2
-        )
-        consistency <- c(
-          if (inspection$same_crs) "CRS consistente" else "CRS diferentes",
-          if (inspection$same_resolution) "resolução consistente" else "resoluções diferentes"
-        )
-        raster_validation_state(list(
-          type = if (inspection$same_crs && inspection$same_resolution) "success" else "warning",
-          text = paste0(
-            "Validação concluída: ", inspection$count, " raster(s), anos ",
-            inspection$years[[1]], "–", inspection$years[[2]], "; ",
-            paste(consistency, collapse = "; "), ". Resolução: ",
-            paste(format(inspection$resolution, digits = 7), collapse = " × "), "."
-          )
-        ))
-      }, error = function(e) {
-        raster_validation_state(list(type = "danger", text = conditionMessage(e)))
-      })
-    })
-
     output$raster_validation_message <- shiny::renderUI({
       message <- raster_validation_state()
       if (is.null(message)) return(NULL)
+      if (!is.null(message$percent) && !identical(message$status, "complete") &&
+          !identical(message$status, "warning") && is.null(message$text)) {
+        percent <- max(0, min(100, as.numeric(message$percent %||% 0)))
+        return(shiny::div(
+          class = "raster-validation-result",
+          shiny::div(
+            class = "progress-status raster-progress-status",
+            shiny::strong(message$stage %||% "Validando rasters"),
+            shiny::small(class = "text-muted", message$detail %||% "")
+          ),
+          shiny::div(
+            class = "progress raster-progress",
+            role = "progressbar",
+            `aria-valuenow` = percent,
+            `aria-valuemin` = 0,
+            `aria-valuemax` = 100,
+            shiny::div(
+              class = "progress-bar progress-bar-striped progress-bar-animated bg-primary",
+              style = paste0("width:", percent, "%"),
+              paste0(round(percent), "%")
+            )
+          )
+        ))
+      }
       shiny::div(
         class = "raster-validation-result",
         app_alert(message$text, color = message$type, dismissible = TRUE)
@@ -547,14 +507,14 @@ analysis_server <- function(id) {
           geo_path = geo_path(),
           group_column = input$group_column,
           no_mesh = isTRUE(input$no_mesh),
-          mesh_size = input$mesh_size_meters,
+          mesh_size = if (isTRUE(input$no_mesh)) NULL else input$mesh_size_km * 1000,
           mesh_unit = "meters",
           raster_folder = normalizePath(raster_folder_path(), mustWork = TRUE),
           output_folder = path.expand(input$output_folder),
           output_name = sanitize_output_name(input$output_name),
           mapbiomas = input$mapbiomas,
           custom_classes = custom_classes(),
-          pixel_km2_ratio = input$pixel_ratio,
+          pixel_km2_ratio = pixel_area_value(),
           max_cells = 50000L
         )
 
@@ -671,8 +631,22 @@ analysis_server <- function(id) {
         },
         bslib::layout_columns(
           col_widths = c(3, 3, 3, 3),
-          bslib::value_box("Unidades da malha", format(nrow(result$mesh), big.mark = "."), showcase = shiny::icon("border-all"), theme = "primary"),
-          bslib::value_box("Grupos", format(length(unique(result$groups[[result$group_column]])), big.mark = "."), showcase = shiny::icon("layer-group"), theme = "info"),
+          bslib::value_box(
+            "Unidades da malha",
+            format(nrow(result$mesh), big.mark = ".", decimal.mark = ","),
+            showcase = shiny::icon("border-all"),
+            theme = "primary"
+          ),
+          bslib::value_box(
+            "Grupos",
+            format(
+              length(unique(result$groups[[result$group_column]])),
+              big.mark = ".",
+              decimal.mark = ","
+            ),
+            showcase = shiny::icon("layer-group"),
+            theme = "info"
+          ),
           bslib::value_box("Anos", paste0(min(result$raster_index$year), "–", max(result$raster_index$year)), showcase = shiny::icon("calendar"), theme = "success"),
           bslib::value_box("Rasters", nrow(result$raster_index), showcase = shiny::icon("images"), theme = "warning")
         )
@@ -691,9 +665,17 @@ analysis_server <- function(id) {
           pageLength = 15,
           dom = "Bfrtip",
           buttons = list(
-            list(extend = "copy", text = "Copiar"),
-            list(extend = "csv", text = "CSV"),
-            list(extend = "excel", text = "Excel")
+            list(
+              extend = "copy",
+              text = "Download resultados (.zip)",
+              className = "btn-download-results",
+              action = DT::JS(sprintf(
+                "function(e, dt, node, config) {
+                   document.getElementById('%s').click();
+                 }",
+                ns("download_all")
+              ))
+            )
           ),
           language = list(
             search = "Pesquisar:",
@@ -705,35 +687,8 @@ analysis_server <- function(id) {
       )
     })
 
-    output$download_buttons <- shiny::renderUI({
-      shiny::req(analysis_result())
-      bslib::card(
-        bslib::card_header("Downloads"),
-        shiny::div(
-          class = "download-grid",
-          shiny::downloadButton(ns("download_complete_txt"), "Tabela completa"),
-          shiny::downloadButton(ns("download_simplified_txt"), "Tabela simplificada"),
-          shiny::downloadButton(ns("download_complete_xlsx"), "Excel completo"),
-          shiny::downloadButton(ns("download_simplified_xlsx"), "Excel simplificado"),
-          shiny::downloadButton(ns("download_complete_gpkg"), "GeoPackage"),
-          shiny::downloadButton(ns("download_all"), "Todos os arquivos (.zip)")
-        )
-      )
-    })
-
-    copy_download <- function(key, default_name) {
-      shiny::downloadHandler(
-        filename = function() basename(analysis_result()$files[[key]] %||% default_name),
-        content = function(file) file.copy(analysis_result()$files[[key]], file, overwrite = TRUE)
-      )
-    }
-    output$download_complete_txt <- copy_download("complete_table", "resultado.txt")
-    output$download_simplified_txt <- copy_download("simplified_table", "resultado_simplificado.txt")
-    output$download_complete_xlsx <- copy_download("complete_xlsx", "resultado.xlsx")
-    output$download_simplified_xlsx <- copy_download("simplified_xlsx", "resultado_simplificado.xlsx")
-    output$download_complete_gpkg <- copy_download("complete_gpkg", "resultado.gpkg")
     output$download_all <- shiny::downloadHandler(
-      filename = function() paste0(analysis_result()$output_name, "_arquivos.zip"),
+      filename = function() paste0(analysis_result()$output_name, "_resultados.zip"),
       content = function(file) {
         files <- unname(analysis_result()$files[file.exists(analysis_result()$files)])
         zip::zipr(file, files = files, root = analysis_result()$output_folder)

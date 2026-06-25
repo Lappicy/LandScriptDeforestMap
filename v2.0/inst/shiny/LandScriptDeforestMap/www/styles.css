@@ -98,42 +98,19 @@ body {
   margin-top: 0.8rem;
 }
 
+.raster-progress-status {
+  margin-top: 0;
+}
+
+.raster-progress {
+  height: 1.1rem;
+}
+
 .field-hint {
   margin: -0.55rem 0 0.75rem;
   color: var(--ls-muted);
   font-size: 0.83rem;
   line-height: 1.35;
-}
-
-.mesh-conversion {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.65rem;
-  margin: 0.65rem 0;
-  padding: 0.75rem 0.85rem;
-  border-left: 4px solid var(--ls-gold);
-  border-radius: 0.35rem;
-  background: rgba(215, 169, 61, 0.1);
-}
-
-.calculation-details {
-  margin: 0.65rem 0 0.85rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid rgba(23, 107, 91, 0.14);
-  border-radius: 0.4rem;
-  background: rgba(23, 107, 91, 0.035);
-  font-size: 0.85rem;
-}
-
-.calculation-details summary {
-  color: var(--ls-accent);
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.calculation-details p {
-  margin: 0.65rem 0 0;
-  line-height: 1.45;
 }
 
 .download-grid {
@@ -172,6 +149,32 @@ body {
   overflow: visible !important;
 }
 
+.source-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+}
+
+.plot-language-switch {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.plot-language-switch .language-button {
+  min-width: 9.5rem;
+  border-radius: 999px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.plot-language-switch .language-button.active {
+  box-shadow: 0 0 0 0.2rem rgba(23, 107, 91, 0.16);
+}
+
 .citation-footer {
   width: 100%;
   padding: 1.25rem max(1rem, 3vw) 1.5rem;
@@ -193,6 +196,72 @@ body {
 .citation-reminder {
   margin-bottom: 0;
   color: var(--ls-muted);
+}
+
+.institutional-footer {
+  padding: 0 1rem 1.6rem;
+}
+
+.institutional-footer-inner {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem;
+  border: 1px solid rgba(23, 107, 91, 0.1);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 10px 30px rgba(26, 50, 44, 0.05);
+}
+
+.institutional-footer-label {
+  display: block;
+  margin-bottom: 0.85rem;
+  color: var(--ls-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.institutional-logo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1.4rem, 5vw, 4rem);
+}
+
+.institutional-logo {
+  display: block;
+  width: auto;
+  max-width: min(100%, 18rem);
+  object-fit: contain;
+}
+
+.logo-unb {
+  height: 4.8rem;
+}
+
+.logo-progysat {
+  height: 4.1rem;
+  max-width: min(100%, 24rem);
+}
+
+.logo-odisseia {
+  height: 4.3rem;
+}
+
+.reset-app-button {
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #fff;
+  font-weight: 700;
+  margin-left: 0.7rem;
+}
+
+.reset-app-button:hover,
+.reset-app-button:focus {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.9);
+  color: #fff;
 }
 
 .download-grid .shiny-download-link {
@@ -257,5 +326,19 @@ body {
 
   .download-grid {
     grid-template-columns: 1fr;
+  }
+
+  .source-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plot-language-switch {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .plot-language-switch .language-button {
+    flex: 1 1 10rem;
   }
 }

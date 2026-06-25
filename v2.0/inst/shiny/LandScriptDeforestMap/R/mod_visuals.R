@@ -2,13 +2,19 @@ visuals_ui <- function(id) {
   ns <- shiny::NS(id)
   shiny::tagList(
     bslib::card(
-      bslib::card_header("Fonte dos resultados"),
+      bslib::card_header(
+        shiny::div(
+          class = "source-header",
+          shiny::span("Fonte dos resultados"),
+          shiny::uiOutput(ns("language_buttons"), inline = TRUE)
+        )
+      ),
       bslib::layout_columns(
         col_widths = c(4, 4, 4),
         shiny::fileInput(
           ns("manual_result"),
-          "Carregar tabela ou GeoPackage (opcional)",
-          accept = c(".gpkg", ".txt", ".tsv", ".csv", ".rds")
+          "Carregar resultados: ZIP, GeoPackage ou tabela (opcional)",
+          accept = c(".zip", ".gpkg", ".txt", ".tsv", ".csv", ".rds")
         ),
         shiny::selectInput(
           ns("gpkg_layer"),
@@ -56,15 +62,15 @@ visuals_ui <- function(id) {
         bslib::layout_sidebar(
           sidebar = bslib::sidebar(
             width = 360,
-            shiny::selectInput(ns("map_class"), "Classe analisada", choices = NULL, selected = "Deforestation"),
-            shiny::selectizeInput(ns("map_years"), "Ano(s)", choices = NULL, multiple = TRUE),
-            shiny::textInput(ns("map_limits"), "Limites das classes", "1, 2, 5"),
-            shiny::textInput(ns("map_colors"), "Paleta", "white, #E5E200, #FC780D, red, darkred"),
-            shiny::checkboxInput(ns("map_satellite"), "Mostrar fundo de satélite (Esri)", FALSE),
+            shiny::checkboxInput(ns("map_satellite"), "Mostrar fundo de satélite (Esri)", TRUE),
             shiny::conditionalPanel(
               condition = sprintf("input['%s']", ns("map_satellite")),
               shiny::sliderInput(ns("map_fill_alpha"), "Opacidade das classes", min = 0.1, max = 1, value = 0.65, step = 0.05)
             ),
+            shiny::selectInput(ns("map_class"), "Classe analisada", choices = NULL, selected = "Deforestation"),
+            shiny::selectizeInput(ns("map_years"), "Ano(s)", choices = NULL, multiple = TRUE),
+            shiny::textInput(ns("map_limits"), "Limites das classes", "1, 2, 5"),
+            shiny::textInput(ns("map_colors"), "Paleta", "white, #E5E200, #FC780D, red, darkred"),
             shiny::selectInput(ns("map_group"), "Coluna de agrupamento", choices = c("Nenhuma" = "")),
             shiny::selectInput(ns("highlight"), "Classe a destacar", choices = c("Nenhuma" = "")),
             shiny::textInput(ns("map_title"), "Título (opcional)", ""),
@@ -88,24 +94,121 @@ visuals_server <- function(id, automatic_result) {
     manual_path <- shiny::reactiveVal(NULL)
     manual_layers <- shiny::reactiveVal(NULL)
     manual_error <- shiny::reactiveVal(NULL)
+    manual_source <- shiny::reactiveVal(NULL)
+    plot_language <- shiny::reactiveVal("pt-BR")
     upload_dir <- tempfile("landscript_visual_")
     dir.create(upload_dir, recursive = TRUE)
+
+    output$language_buttons <- shiny::renderUI({
+      language <- plot_language()
+      shiny::div(
+        class = "plot-language-switch",
+        shiny::actionButton(
+          session$ns("language_pt"),
+          "🇧🇷 Português (Brasil)",
+          class = paste(
+            "btn-sm language-button",
+            if (language == "pt-BR") "btn-primary active" else "btn-outline-secondary"
+          ),
+          title = "Traduzir gráfico e mapa para português do Brasil"
+        ),
+        shiny::actionButton(
+          session$ns("language_en"),
+          "🇺🇸 English",
+          class = paste(
+            "btn-sm language-button",
+            if (language == "en") "btn-primary active" else "btn-outline-secondary"
+          ),
+          title = "Translate chart and map into English"
+        )
+      )
+    })
+
+    shiny::observeEvent(input$language_pt, {
+      plot_language("pt-BR")
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$language_en, {
+      plot_language("en")
+    }, ignoreInit = TRUE)
+
+    default_chart_titles <- c(
+      `pt-BR` = "Desmatamento e variação das classes",
+      en = "Deforestation and class variation"
+    )
+    shiny::observeEvent(plot_language(), {
+      current_title <- trimws(input$chart_title %||% "")
+      if (!nzchar(current_title) || current_title %in% unname(default_chart_titles)) {
+        shiny::updateTextInput(
+          session,
+          "chart_title",
+          value = unname(default_chart_titles[[plot_language()]])
+        )
+      }
+    }, ignoreInit = FALSE)
+
+    chart_title_value <- shiny::reactive({
+      current_title <- trimws(input$chart_title %||% "")
+      if (!nzchar(current_title) || current_title %in% unname(default_chart_titles)) {
+        return(unname(default_chart_titles[[plot_language()]]))
+      }
+      current_title
+    })
 
     shiny::observeEvent(input$manual_result, {
       tryCatch({
         path <- copy_upload_to_named_file(input$manual_result, upload_dir)
-        manual_path(path)
         manual_error(NULL)
-        if (tolower(tools::file_ext(path)) == "gpkg") {
-          layers <- sf::st_layers(path)$name
+
+        source <- list(
+          uploaded = basename(path),
+          selected = basename(path),
+          selected_type = NULL,
+          from_zip = FALSE
+        )
+        selected_path <- path
+        extension <- tolower(tools::file_ext(path))
+
+        if (extension == "zip") {
+          extract_dir <- tempfile("landscript_results_", tmpdir = upload_dir)
+          extracted <- safe_extract_zip(path, extract_dir)
+          selected <- select_preferred_result_file(extracted)
+          selected_path <- selected$path
+          extension <- tolower(tools::file_ext(selected_path))
+          source <- list(
+            uploaded = basename(path),
+            selected = basename(selected_path),
+            selected_type = selected$type,
+            from_zip = TRUE
+          )
+        }
+
+        if (extension == "gpkg") {
+          layers <- sf::st_layers(selected_path)$name
+          if (!length(layers)) stop("O GeoPackage selecionado não possui camadas.", call. = FALSE)
           manual_layers(layers)
           shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = if ("mesh" %in% layers) "mesh" else layers[[1]])
+        } else if (extension == "rds") {
+          object <- readRDS(selected_path)
+          layers <- if (is.list(object) && all(c("mesh", "groups", "total") %in% names(object))) {
+            c("mesh", "groups", "total")
+          } else {
+            character()
+          }
+          manual_layers(layers)
+          if (length(layers)) {
+            shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = "mesh")
+          }
         } else {
           manual_layers(NULL)
         }
+
+        manual_path(selected_path)
+        manual_source(source)
       }, error = function(e) {
         manual_error(conditionMessage(e))
         manual_path(NULL)
+        manual_source(NULL)
       })
     })
 
@@ -129,6 +232,7 @@ visuals_server <- function(id, automatic_result) {
       if (!is.null(manual_path())) {
         status <- tryCatch({
           data <- current_data()
+          source <- manual_source()
           detail <- if (inherits(data, "sf")) {
             paste0(
               " — camada ", input$gpkg_layer,
@@ -143,8 +247,16 @@ visuals_server <- function(id, automatic_result) {
               " registros"
             )
           }
+          origin <- if (isTRUE(source$from_zip)) {
+            paste0(
+              "ZIP ", source$uploaded, ": selecionado automaticamente ",
+              source$selected_type, " (", source$selected, ")"
+            )
+          } else {
+            paste0("Usando arquivo manual: ", source$selected %||% basename(manual_path()))
+          }
           app_alert(
-            paste0("Usando arquivo manual: ", basename(manual_path()), detail),
+            paste0(origin, detail),
             color = "info"
           )
         }, error = function(e) {
@@ -204,8 +316,9 @@ visuals_server <- function(id, automatic_result) {
         primary.column = input$primary_column,
         comparison.colors = parse_color_vector(input$chart_colors),
         primary.color = parse_color_vector(input$primary_color)[[1]],
-        title.name = input$chart_title,
-        different.group = input$chart_group
+        title.name = chart_title_value(),
+        different.group = input$chart_group,
+        language = plot_language()
       )
     })
 
@@ -233,7 +346,8 @@ visuals_server <- function(id, automatic_result) {
         highlight = input$highlight,
         title = if (nzchar(trimws(input$map_title %||% ""))) input$map_title else NULL,
         satellite = isTRUE(input$map_satellite),
-        fill.alpha = if (isTRUE(input$map_satellite)) input$map_fill_alpha %||% 0.65 else 1
+        fill.alpha = if (isTRUE(input$map_satellite)) input$map_fill_alpha %||% 0.65 else 1,
+        language = plot_language()
       )
     })
 
@@ -261,11 +375,17 @@ visuals_server <- function(id, automatic_result) {
     }
 
     output$download_chart <- shiny::downloadHandler(
-      filename = function() paste0("serie_temporal.", input$chart_format),
+      filename = function() {
+        prefix <- if (plot_language() == "pt-BR") "serie_temporal" else "time_series"
+        paste0(prefix, ".", input$chart_format)
+      },
       content = function(file) save_plot(chart_object(), file, input$chart_format, input$chart_width, input$chart_height)
     )
     output$download_map <- shiny::downloadHandler(
-      filename = function() paste0("mapa_resultados.", input$map_format),
+      filename = function() {
+        prefix <- if (plot_language() == "pt-BR") "mapa_resultados" else "results_map"
+        paste0(prefix, ".", input$map_format)
+      },
       content = function(file) save_plot(map_object(), file, input$map_format, input$map_width, input$map_height)
     )
 

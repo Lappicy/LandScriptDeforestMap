@@ -1,3 +1,18 @@
+drop_zm_geometry <- function(geo) {
+  if (!inherits(geo, "sf")) return(geo)
+  tryCatch(
+    sf::st_zm(geo, drop = TRUE, what = "ZM"),
+    error = function(e) geo
+  )
+}
+
+safe_st_union <- function(x, y = NULL) {
+  if (is.null(y)) {
+    return(suppressMessages(suppressWarnings(sf::st_union(x))))
+  }
+  suppressMessages(suppressWarnings(sf::st_union(x, y)))
+}
+
 read_geo <- function(file_name, projection_wanted = 4326, layer = NULL) {
   if (inherits(file_name, "sf")) {
     geo <- file_name
@@ -13,6 +28,7 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL) {
   if (!inherits(geo, "sf") || !nrow(geo)) {
     stop("O arquivo geoespacial não contém feições.", call. = FALSE)
   }
+  geo <- drop_zm_geometry(geo)
   if (is.na(sf::st_crs(geo))) {
     stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
   }
@@ -36,6 +52,7 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL) {
 
   geo <- suppressWarnings(sf::st_collection_extract(geo, "POLYGON"))
   geo <- sf::st_transform(geo, projection_wanted)
+  geo <- drop_zm_geometry(geo)
   sf::st_geometry(geo) <- "geometry"
   geo
 }
@@ -45,7 +62,7 @@ geo_summary <- function(geo) {
   data.frame(
     item = c("Feições", "CRS", "Geometria", "Colunas de atributos", "Extensão"),
     value = c(
-      format(nrow(geo), big.mark = "."),
+      format(nrow(geo), big.mark = ".", decimal.mark = ","),
       sf::st_crs(geo)$input %||% paste0("EPSG:", sf::st_crs(geo)$epsg),
       paste(unique(as.character(sf::st_geometry_type(geo))), collapse = ", "),
       length(sf::st_drop_geometry(geo)),
@@ -57,7 +74,7 @@ geo_summary <- function(geo) {
 
 local_metric_crs <- function(geo) {
   geo_wgs84 <- sf::st_transform(geo, 4326)
-  center <- suppressWarnings(sf::st_point_on_surface(sf::st_union(geo_wgs84)))
+  center <- suppressWarnings(sf::st_point_on_surface(safe_st_union(geo_wgs84)))
   coordinates <- sf::st_coordinates(center)[1, ]
   longitude <- coordinates[["X"]]
   latitude <- coordinates[["Y"]]
@@ -82,7 +99,7 @@ meters_to_degree_equivalent <- function(meters, geo = NULL) {
 
   latitude <- 0
   if (!is.null(geo) && inherits(geo, "sf") && nrow(geo)) {
-    center <- suppressWarnings(sf::st_point_on_surface(sf::st_union(sf::st_transform(geo, 4326))))
+    center <- suppressWarnings(sf::st_point_on_surface(safe_st_union(sf::st_transform(geo, 4326))))
     latitude <- unname(sf::st_coordinates(center)[1, "Y"])
   }
   latitude_radians <- latitude * pi / 180
@@ -126,7 +143,7 @@ prepare_group_boundaries <- function(geo, group_column = NULL) {
 
   split_geo <- split(geo, as.character(geo[[group_column]]), drop = TRUE)
   dissolved <- lapply(names(split_geo), function(level) {
-    geometry <- suppressWarnings(sf::st_union(sf::st_geometry(split_geo[[level]])))
+    geometry <- safe_st_union(sf::st_geometry(split_geo[[level]]))
     out <- data.frame(value = level, stringsAsFactors = FALSE)
     names(out) <- group_column
     sf::st_sf(out, geometry = sf::st_sfc(geometry, crs = sf::st_crs(geo)))
@@ -151,12 +168,12 @@ prepare_group_boundaries <- function(geo, group_column = NULL) {
       if (nrow(current) && !all(sf::st_is_empty(current))) {
         cleaned[[i]] <- current
         assigned <- if (is.null(assigned)) {
-          suppressMessages(suppressWarnings(sf::st_union(current)))
+          safe_st_union(current)
         } else {
-          suppressMessages(suppressWarnings(sf::st_union(
+          safe_st_union(
             assigned,
-            suppressMessages(sf::st_union(current))
-          )))
+            safe_st_union(current)
+          )
         }
       }
     }
@@ -210,11 +227,12 @@ create.mesh <- function(
     boundaries
   }
 
-  outline <- suppressWarnings(sf::st_union(working_boundaries))
+  outline <- safe_st_union(working_boundaries)
   grid_geometry <- sf::st_make_grid(outline, cellsize = mesh.size, square = TRUE)
   if (length(grid_geometry) > max.cells) {
     stop(
-      "A configuração produziria ", format(length(grid_geometry), big.mark = "."),
+      "A configuração produziria ",
+      format(length(grid_geometry), big.mark = ".", decimal.mark = ","),
       " quadrículas antes do recorte. Aumente o tamanho da malha.",
       call. = FALSE
     )
@@ -229,6 +247,7 @@ create.mesh <- function(
   if (identical(mesh.unit, "meters")) {
     mesh <- sf::st_transform(mesh, original_crs)
   }
+  mesh <- drop_zm_geometry(mesh)
   mesh$ID_mesh <- seq_len(nrow(mesh))
   mesh[[group.column]] <- factor(mesh[[group.column]])
   mesh <- mesh[, c("ID_mesh", "Grid_ID", group.column, "geometry")]
@@ -241,6 +260,7 @@ create.mesh <- function(
 }
 
 mesh_for_leaflet <- function(mesh, max_features = 6000L) {
+  mesh <- drop_zm_geometry(mesh)
   if (nrow(mesh) <= max_features) return(mesh)
   mesh[seq_len(max_features), , drop = FALSE]
 }
@@ -268,7 +288,7 @@ read_result_dataset <- function(path, layer = NULL) {
     if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
       stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
     }
-    return(data)
+    return(drop_zm_geometry(data))
   }
   if (extension %in% c("csv")) {
     return(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE))

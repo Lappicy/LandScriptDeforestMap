@@ -1,12 +1,102 @@
+normalize_plot_language <- function(language = "pt-BR") {
+  language <- tolower(trimws(as.character(language %||% "pt-BR")[[1]]))
+  if (language %in% c("en", "en-us", "en-gb", "english")) "en" else "pt-BR"
+}
+
+plot_class_label <- function(x, language = "pt-BR") {
+  language <- normalize_plot_language(language)
+  x <- as.character(x)
+
+  dictionaries <- list(
+    `pt-BR` = c(
+      Deforestation = "Desmatamento",
+      Reforestation = "Reflorestamento",
+      Forest = "Floresta",
+      NonForest = "Não floresta",
+      Water = "Água",
+      Others = "Outros",
+      Urban = "Área urbana",
+      Mining = "Mineração",
+      Pasture = "Pastagem",
+      Agriculture = "Agricultura",
+      CropLivestock = "Agropecuária",
+      Fire = "Fogo"
+    ),
+    en = c(
+      Deforestation = "Deforestation",
+      Reforestation = "Reforestation",
+      Forest = "Forest",
+      NonForest = "Non-forest",
+      Water = "Water",
+      Others = "Others",
+      Urban = "Urban area",
+      Mining = "Mining",
+      Pasture = "Pasture",
+      Agriculture = "Agriculture",
+      CropLivestock = "Crop and livestock",
+      Fire = "Fire"
+    )
+  )
+
+  translate_one <- function(value) {
+    dictionary <- dictionaries[[language]]
+    if (value %in% names(dictionary)) return(unname(dictionary[[value]]))
+
+    prefixes <- c("Variation_", "Growth_")
+    prefix <- prefixes[startsWith(value, prefixes)][1] %||% ""
+    if (nzchar(prefix)) {
+      base <- sub(paste0("^", prefix), "", value)
+      base_label <- if (base %in% names(dictionary)) {
+        unname(dictionary[[base]])
+      } else {
+        gsub("_", " ", base, fixed = TRUE)
+      }
+      if (language == "pt-BR") {
+        descriptor <- if (prefix == "Variation_") "Variação de " else "Crescimento de "
+        return(paste0(descriptor, base_label))
+      }
+      descriptor <- if (prefix == "Variation_") " variation" else " growth"
+      return(paste0(base_label, descriptor))
+    }
+
+    gsub("_", " ", value, fixed = TRUE)
+  }
+
+  vapply(x, translate_one, character(1), USE.NAMES = FALSE)
+}
+
 build_timeseries_plot <- function(
   proxy.table,
   comparison.columns,
   primary.column = "Deforestation",
   comparison.colors = c("purple", "grey50", "#EA9999", "darkorange"),
   primary.color = "darkgreen",
-  title.name = "Desmatamento e variação das classes",
-  different.group = NULL
+  title.name = NULL,
+  different.group = NULL,
+  language = "pt-BR"
 ) {
+  language <- normalize_plot_language(language)
+  text <- if (language == "pt-BR") {
+    list(
+      default_title = "Desmatamento e variação das classes",
+      year = "Ano",
+      class = "Classe",
+      best_correlation = "Maior correlação",
+      unavailable_correlation = "Correlação indisponível para os dados selecionados"
+    )
+  } else {
+    list(
+      default_title = "Deforestation and class variation",
+      year = "Year",
+      class = "Class",
+      best_correlation = "Highest correlation",
+      unavailable_correlation = "Correlation unavailable for the selected data"
+    )
+  }
+  if (is.null(title.name) || !nzchar(trimws(title.name))) {
+    title.name <- text$default_title
+  }
+
   data <- if (inherits(proxy.table, "sf")) sf::st_drop_geometry(proxy.table) else as.data.frame(proxy.table)
   if (!"Year" %in% names(data)) stop("A tabela precisa conter a coluna Year.", call. = FALSE)
   if (!primary.column %in% names(data)) stop("Variável principal não encontrada.", call. = FALSE)
@@ -44,11 +134,11 @@ build_timeseries_plot <- function(
   best_value <- cor_values[[best_name]]
   subtitle <- if (length(best_name) && is.finite(best_value)) {
     paste0(
-      "Maior correlação: ", best_name, " (",
+      text$best_correlation, ": ", plot_class_label(best_name, language), " (",
       if (best_value >= 0) "+" else "", sprintf("%.2f", best_value), ")"
     )
   } else {
-    "Correlação indisponível para os dados selecionados"
+    text$unavailable_correlation
   }
 
   long <- tidyr::pivot_longer(
@@ -61,6 +151,12 @@ build_timeseries_plot <- function(
 
   comparison.colors <- rep(comparison.colors, length.out = length(comparison.columns))
   palette <- stats::setNames(c(primary.color, comparison.colors), selected)
+  display_labels <- plot_class_label(selected, language)
+  number_format <- if (language == "pt-BR") {
+    function(x) format(x, big.mark = ".", decimal.mark = ",", scientific = FALSE)
+  } else {
+    function(x) format(x, big.mark = ",", decimal.mark = ".", scientific = FALSE)
+  }
 
   plot <- ggplot2::ggplot(
     long,
@@ -68,17 +164,21 @@ build_timeseries_plot <- function(
   ) +
     ggplot2::geom_line(linewidth = 0.9, alpha = 0.8) +
     ggplot2::geom_point(size = 1.8, alpha = 0.75) +
-    ggplot2::scale_color_manual(values = palette) +
+    ggplot2::scale_color_manual(
+      values = palette,
+      breaks = selected,
+      labels = display_labels
+    ) +
     ggplot2::scale_x_continuous(breaks = scales::pretty_breaks()) +
     ggplot2::scale_y_continuous(
-      labels = function(x) format(x, big.mark = ".", decimal.mark = ",", scientific = FALSE)
+      labels = number_format
     ) +
     ggplot2::labs(
       title = title.name,
       subtitle = subtitle,
-      x = "Ano",
+      x = text$year,
       y = expression(km^2),
-      color = "Classe"
+      color = text$class
     ) +
     ggplot2::theme_bw(base_size = 12) +
     ggplot2::theme(
@@ -105,8 +205,31 @@ mesh.map <- function(
   highlight = NULL,
   title = NULL,
   satellite = FALSE,
-  fill.alpha = 1
+  fill.alpha = 1,
+  language = "pt-BR"
 ) {
+  language <- normalize_plot_language(language)
+  text <- if (language == "pt-BR") {
+    list(
+      no = "Sem",
+      to = "a",
+      in_year = "em",
+      accumulated = "Acumulado de",
+      between = "entre",
+      and = "e",
+      highlight = "Destaque"
+    )
+  } else {
+    list(
+      no = "No",
+      to = "to",
+      in_year = "in",
+      accumulated = "Accumulated",
+      between = "from",
+      and = "to",
+      highlight = "Highlight"
+    )
+  }
   if (!inherits(mesh.data, "sf")) {
     stop("O mapa requer um objeto geoespacial sf.", call. = FALSE)
   }
@@ -145,16 +268,21 @@ mesh.map <- function(
   col.limits <- col.limits[is.finite(col.limits) & col.limits > 0]
   required_colors <- length(col.limits) + 2L
   col.used <- rep(col.used, length.out = required_colors)
+  class_label <- plot_class_label(class, language)
+  class_label_lower <- tolower(class_label)
 
   breaks <- c(-Inf, 0, col.limits, Inf)
   labels <- c(
-    paste0("Sem ", tolower(class)),
+    paste(text$no, class_label_lower),
     if (length(col.limits)) {
       c(
-        paste0("> 0 a ", col.limits[[1]], " km²"),
+        paste0("> 0 ", text$to, " ", col.limits[[1]], " km²"),
         if (length(col.limits) > 1L) {
           vapply(seq_len(length(col.limits) - 1L), function(i) {
-            paste0("> ", col.limits[[i]], " a ", col.limits[[i + 1L]], " km²")
+            paste0(
+              "> ", col.limits[[i]], " ", text$to, " ",
+              col.limits[[i + 1L]], " km²"
+            )
           }, character(1))
         },
         paste0("> ", utils::tail(col.limits, 1L), " km²")
@@ -203,14 +331,21 @@ mesh.map <- function(
     ggplot2::scale_fill_manual(values = col.used, drop = FALSE, na.value = "grey85") +
     ggplot2::labs(
       title = title %||% if (length(year.used) == 1L) {
-        paste(class, "em", year.used)
+        paste(class_label, text$in_year, year.used)
       } else {
-        paste("Acumulado de", class, "entre", min(year.used), "e", max(year.used))
+        paste(
+          text$accumulated, class_label_lower, text$between,
+          min(year.used), text$and, max(year.used)
+        )
       },
-      subtitle = if (!is.null(highlight) && nzchar(highlight)) paste("Destaque:", highlight) else NULL,
+      subtitle = if (!is.null(highlight) && nzchar(highlight)) {
+        paste0(text$highlight, ": ", highlight)
+      } else {
+        NULL
+      },
       x = "Longitude",
       y = "Latitude",
-      fill = paste0(class, " (km²)")
+      fill = paste0(class_label, " (km²)")
     ) +
     ggspatial::annotation_scale(location = "br", bar_cols = c("black", "white")) +
     ggspatial::annotation_north_arrow(

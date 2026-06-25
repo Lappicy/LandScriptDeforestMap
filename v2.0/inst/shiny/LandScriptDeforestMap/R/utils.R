@@ -146,6 +146,10 @@ raster_pixel_area_km2 <- function(path) {
     stop("Raster sem CRS: ", basename(path), call. = FALSE)
   }
 
+  raster_pixel_area_from_raster(raster, basename(path))
+}
+
+raster_pixel_area_from_raster <- function(raster, label = "raster") {
   area_raster <- terra::cellSize(raster, unit = "km")
   center <- data.frame(
     x = mean(c(terra::xmin(raster), terra::xmax(raster))),
@@ -153,7 +157,7 @@ raster_pixel_area_km2 <- function(path) {
   )
   area <- terra::extract(area_raster, center)[[2]]
   if (!length(area) || !is.finite(area) || area <= 0) {
-    stop("Não foi possível calcular a área do pixel de ", basename(path), ".", call. = FALSE)
+    stop("Não foi possível calcular a área do pixel de ", label, ".", call. = FALSE)
   }
   as.numeric(area)
 }
@@ -194,23 +198,61 @@ normalize_pixel_area_km2 <- function(area, tolerance = 0.03) {
   )
 }
 
-inspect_raster_folder <- function(folder) {
+report_progress <- function(progress, percent, stage, detail = NULL, status = "running") {
+  if (is.function(progress)) {
+    progress(percent, stage, detail %||% "", status)
+  }
+}
+
+inspect_raster_folder <- function(folder, progress = NULL) {
+  report_progress(progress, 0, "Listando rasters", "Procurando arquivos .tif na pasta selecionada.")
   index <- list_raster_files(folder)
-  metadata <- lapply(index$path, function(path) {
+  total <- nrow(index)
+  metadata <- vector("list", total)
+
+  for (i in seq_len(total)) {
+    path <- index$path[[i]]
+    label <- paste0(index$year[[i]], " — ", basename(path))
+    segment_start <- 5 + ((i - 1) / total) * 87
+    segment_mid <- segment_start + (87 / total) * 0.4
+    segment_end <- 5 + (i / total) * 87
+    report_progress(
+      progress,
+      segment_start,
+      paste0("Acessando imagem ", i, " de ", total),
+      paste0(index$year[[i]], " — ", basename(path))
+    )
     raster <- terra::rast(path)
     if (terra::nlyr(raster) != 1L) {
       stop("O raster deve possuir uma única camada: ", basename(path), call. = FALSE)
     }
     crs <- terra::crs(raster)
     if (!nzchar(crs)) stop("Raster sem CRS: ", basename(path), call. = FALSE)
-    list(
+
+    report_progress(
+      progress,
+      segment_mid,
+      paste0("Validando imagem ", i, " de ", total),
+      paste0(index$year[[i]], " — conferindo CRS, resolução e área do pixel.")
+    )
+
+    metadata[[i]] <- list(
       crs = crs,
       crs_label = terra::crs(raster, proj = TRUE),
       resolution = terra::res(raster),
       dimensions = c(terra::ncol(raster), terra::nrow(raster)),
-      pixel_area_km2 = raster_pixel_area_km2(path)
+      pixel_area_km2 = raster_pixel_area_from_raster(raster, label)
     )
-  })
+
+    report_progress(
+      progress,
+      segment_end,
+      paste0("Validando imagem ", i, " de ", total),
+      paste0("Imagem validada: ", index$year[[i]], " — ", basename(path))
+    )
+  }
+
+  report_progress(progress, 92, "Consolidando validação", "Comparando CRS e resolução entre as imagens.")
 
   crs_values <- vapply(metadata, `[[`, character(1), "crs")
   resolution_values <- do.call(rbind, lapply(metadata, `[[`, "resolution"))
@@ -288,6 +330,122 @@ read_progress <- function(path) {
   )
 }
 
+supported_vector_extensions <- function() {
+  c("gpkg", "geojson", "json", "shp", "kml", "gml")
+}
+
+shapefile_extensions <- function() {
+  c("shp", "shx", "dbf", "prj", "cpg", "qpj", "sbn", "sbx", "xml")
+}
+
+required_shapefile_extensions <- function() {
+  c("shp", "shx", "dbf", "prj")
+}
+
+select_primary_vector_file <- function(files) {
+  files <- normalizePath(files[file.exists(files)], mustWork = TRUE)
+  extensions <- tolower(tools::file_ext(files))
+  priority <- c("gpkg", "geojson", "json", "shp", "kml", "gml")
+
+  for (ext in priority) {
+    candidate <- files[extensions == ext]
+    if (length(candidate)) return(candidate[[1]])
+  }
+
+  stop(
+    "Formato não reconhecido. Envie GeoPackage, GeoJSON, ZIP com shapefile completo ou arquivo suportado pelo sf.",
+    call. = FALSE
+  )
+}
+
+complete_shapefile_bundle <- function(primary, destination, uploaded_files = character(), source = c("upload", "local", "zip")) {
+  source <- match.arg(source)
+  primary <- normalizePath(primary, mustWork = TRUE)
+  primary_base <- tolower(tools::file_path_sans_ext(basename(primary)))
+  destination <- normalizePath(destination, mustWork = FALSE)
+  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+
+  uploaded_files <- uploaded_files[file.exists(uploaded_files)]
+  sibling_files <- list.files(dirname(primary), full.names = TRUE, recursive = FALSE)
+  candidates <- unique(c(primary, uploaded_files, sibling_files))
+  candidate_base <- tolower(tools::file_path_sans_ext(basename(candidates)))
+  candidate_ext <- tolower(tools::file_ext(candidates))
+  selected <- candidates[
+    candidate_base == primary_base &
+      candidate_ext %in% shapefile_extensions()
+  ]
+
+  available_extensions <- unique(tolower(tools::file_ext(selected)))
+  missing_extensions <- setdiff(required_shapefile_extensions(), available_extensions)
+
+  if (length(missing_extensions)) {
+    source_hint <- switch(
+      source,
+      local = "Confira se esses arquivos estão no mesmo diretório do .shp selecionado.",
+      zip = "Confira se o ZIP contém todos os componentes do shapefile.",
+      upload = paste0(
+        "No upload pelo navegador, o Shiny só recebe os arquivos selecionados. ",
+        "Envie um .zip com todos os componentes ou selecione todos eles juntos."
+      )
+    )
+    stop(
+      "O shapefile está incompleto. São necessários arquivos com o mesmo nome-base: ",
+      paste0(".", required_shapefile_extensions(), collapse = ", "),
+      ". Está faltando: ",
+      paste0(".", missing_extensions, collapse = ", "),
+      ". ",
+      source_hint,
+      call. = FALSE
+    )
+  }
+
+  target <- file.path(destination, basename(selected))
+  copied_ok <- vapply(seq_along(selected), function(i) {
+    source_path <- normalizePath(selected[[i]], mustWork = TRUE)
+    target_path <- normalizePath(target[[i]], mustWork = FALSE)
+    if (identical(source_path, target_path)) return(TRUE)
+    file.copy(source_path, target[[i]], overwrite = TRUE)
+  }, logical(1))
+  if (!all(copied_ok)) {
+    stop("Não foi possível preparar os arquivos do shapefile.", call. = FALSE)
+  }
+  normalizePath(target[tolower(tools::file_ext(target)) == "shp"][[1]], mustWork = TRUE)
+}
+
+stage_vector_files <- function(files, destination, source = c("upload", "local", "zip")) {
+  source <- match.arg(source)
+  files <- normalizePath(files[file.exists(files)], mustWork = TRUE)
+  primary <- select_primary_vector_file(files)
+
+  if (tolower(tools::file_ext(primary)) == "shp") {
+    return(complete_shapefile_bundle(primary, destination, uploaded_files = files, source = source))
+  }
+
+  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+  target <- file.path(destination, basename(primary))
+  if (identical(normalizePath(primary, mustWork = TRUE), normalizePath(target, mustWork = FALSE))) {
+    return(normalizePath(primary, mustWork = TRUE))
+  }
+  if (!file.copy(primary, target, overwrite = TRUE)) {
+    stop("Não foi possível preparar o arquivo geoespacial.", call. = FALSE)
+  }
+  normalizePath(target, mustWork = TRUE)
+}
+
+stage_local_vector <- function(path, destination) {
+  if (is.null(path) || !length(path) || !file.exists(path[[1]])) {
+    stop("Selecione um arquivo geoespacial.", call. = FALSE)
+  }
+
+  path <- normalizePath(path[[1]], mustWork = TRUE)
+  if (tolower(tools::file_ext(path)) == "zip") {
+    extracted <- safe_extract_zip(path, file.path(destination, "zip_extracted"))
+    return(stage_vector_files(extracted, destination, source = "zip"))
+  }
+
+  stage_vector_files(path, destination, source = "local")
+}
+
 stage_uploaded_vector <- function(upload, destination) {
   if (is.null(upload) || !nrow(upload)) {
     stop("Selecione um arquivo geoespacial.", call. = FALSE)
@@ -298,24 +456,13 @@ stage_uploaded_vector <- function(upload, destination) {
   ok <- file.copy(upload$datapath, copied, overwrite = TRUE)
   if (!all(ok)) stop("Não foi possível preparar os arquivos enviados.", call. = FALSE)
 
-  extensions <- tolower(tools::file_ext(copied))
-  priority <- c("gpkg", "geojson", "json", "shp", "kml", "gml")
-  primary <- NULL
-  for (ext in priority) {
-    candidate <- copied[extensions == ext]
-    if (length(candidate)) {
-      primary <- candidate[[1]]
-      break
-    }
-  }
-  if (is.null(primary)) {
-    stop(
-      "Formato não reconhecido. Envie GeoPackage, GeoJSON ou todos os componentes do shapefile.",
-      call. = FALSE
-    )
+  zip_files <- copied[tolower(tools::file_ext(copied)) == "zip"]
+  if (length(zip_files)) {
+    extracted <- safe_extract_zip(zip_files[[1]], file.path(destination, "zip_extracted"))
+    return(stage_vector_files(extracted, destination, source = "zip"))
   }
 
-  normalizePath(primary, mustWork = TRUE)
+  stage_vector_files(copied, destination, source = "upload")
 }
 
 copy_upload_to_named_file <- function(upload, destination) {
@@ -325,6 +472,124 @@ copy_upload_to_named_file <- function(upload, destination) {
     stop("Não foi possível preparar o arquivo enviado.", call. = FALSE)
   }
   normalizePath(target, mustWork = TRUE)
+}
+
+safe_extract_zip <- function(
+  zip_path,
+  destination,
+  max_files = 1000L,
+  max_uncompressed_bytes = 2 * 1024^3
+) {
+  if (!file.exists(zip_path) || tolower(tools::file_ext(zip_path)) != "zip") {
+    stop("O arquivo informado não é um ZIP válido.", call. = FALSE)
+  }
+
+  entries <- tryCatch(
+    utils::unzip(zip_path, list = TRUE),
+    error = function(e) {
+      stop("Não foi possível ler o ZIP: ", conditionMessage(e), call. = FALSE)
+    }
+  )
+  if (!nrow(entries)) stop("O ZIP está vazio.", call. = FALSE)
+  if (nrow(entries) > max_files) {
+    stop("O ZIP contém arquivos demais para ser processado.", call. = FALSE)
+  }
+  if (sum(as.numeric(entries$Length), na.rm = TRUE) > max_uncompressed_bytes) {
+    stop("O conteúdo descompactado do ZIP excede o limite permitido.", call. = FALSE)
+  }
+
+  entry_names <- gsub("\\\\", "/", entries$Name)
+  path_parts <- strsplit(entry_names, "/", fixed = TRUE)
+  invalid <- startsWith(entry_names, "/") |
+    grepl("^[A-Za-z]:", entry_names) |
+    vapply(path_parts, function(x) any(x == ".."), logical(1))
+  if (any(invalid)) {
+    stop("O ZIP contém caminhos inseguros e não pode ser aberto.", call. = FALSE)
+  }
+
+  safe_unlink(destination)
+  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+  utils::unzip(zip_path, exdir = destination, overwrite = TRUE)
+
+  extracted <- list.files(
+    destination,
+    recursive = TRUE,
+    full.names = TRUE,
+    all.files = TRUE,
+    no.. = TRUE
+  )
+  extracted <- extracted[file.info(extracted)$isdir %in% FALSE]
+  if (!length(extracted)) {
+    stop("Nenhum arquivo foi encontrado dentro do ZIP.", call. = FALSE)
+  }
+
+  destination_root <- paste0(normalizePath(destination, mustWork = TRUE), .Platform$file.sep)
+  normalized <- normalizePath(extracted, mustWork = TRUE)
+  if (any(!startsWith(normalized, destination_root))) {
+    stop("O ZIP tentou gravar arquivos fora da pasta temporária.", call. = FALSE)
+  }
+  if (any(nzchar(Sys.readlink(normalized)))) {
+    stop("O ZIP contém links simbólicos, que não são permitidos.", call. = FALSE)
+  }
+
+  normalized
+}
+
+select_preferred_result_file <- function(files) {
+  files <- normalizePath(files[file.exists(files)], mustWork = TRUE)
+  extensions <- tolower(tools::file_ext(files))
+
+  geopackages <- files[extensions == "gpkg"]
+  if (length(geopackages)) {
+    scores <- vapply(geopackages, function(path) {
+      name <- tolower(basename(path))
+      layers <- tryCatch(sf::st_layers(path)$name, error = function(e) character())
+      score <- 0
+      if ("mesh" %in% layers) score <- score + 1000
+      if (all(c("mesh", "groups", "total") %in% layers)) score <- score + 500
+      if (!startsWith(name, "simplified_") && !grepl("simplificado", name)) {
+        score <- score + 300
+      }
+      if (!grepl("calcrasterpixels|pixel", name)) score <- score + 50
+      score + min(file.info(path)$size / 1e9, 1)
+    }, numeric(1))
+    selected <- geopackages[[which.max(scores)]]
+    return(list(
+      path = selected,
+      type = "GeoPackage completo",
+      layers = sf::st_layers(selected)$name
+    ))
+  }
+
+  rds_files <- files[extensions == "rds"]
+  if (length(rds_files)) {
+    valid <- vapply(rds_files, function(path) {
+      tryCatch({
+        object <- readRDS(path)
+        is.list(object) && all(c("mesh", "groups", "total") %in% names(object))
+      }, error = function(e) FALSE)
+    }, logical(1))
+    if (any(valid)) {
+      selected <- rds_files[valid][[1]]
+      return(list(path = selected, type = "objeto R completo", layers = c("mesh", "groups", "total")))
+    }
+  }
+
+  tables <- files[extensions %in% c("txt", "tsv", "csv")]
+  if (length(tables)) {
+    names_lower <- tolower(basename(tables))
+    eligible <- !startsWith(names_lower, "simplified_") &
+      !grepl("simplificado|calcrasterpixels", names_lower)
+    if (any(eligible)) tables <- tables[eligible]
+    selected <- tables[[which.max(file.info(tables)$size)]]
+    return(list(path = selected, type = "tabela completa", layers = NULL))
+  }
+
+  stop(
+    "O ZIP não contém um resultado compatível. Inclua o GeoPackage completo, ",
+    "o arquivo RDS completo ou a tabela completa.",
+    call. = FALSE
+  )
 }
 
 safe_unlink <- function(path) {
