@@ -70,20 +70,35 @@ body {
   background: #d9e3e0;
 }
 
-.geo-upload-dropzone {
+.geo-upload-dropzone,
+.raster-upload-dropzone {
   margin-bottom: 0.35rem;
 }
 
-.geo-upload-dropzone .form-label {
+.geo-upload-dropzone .form-label,
+.raster-upload-dropzone .form-label {
   display: none;
 }
 
-.geo-upload-dropzone .input-group {
-  display: grid;
-  gap: 0.45rem;
+.geo-upload-dropzone .shiny-input-container,
+.raster-upload-dropzone .shiny-input-container {
+  width: 100%;
 }
 
-.geo-upload-dropzone .btn {
+.geo-upload-dropzone .input-group,
+.raster-upload-dropzone .input-group {
+  display: grid;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.geo-upload-dropzone .input-group > *,
+.raster-upload-dropzone .input-group > * {
+  width: 100% !important;
+}
+
+.geo-upload-dropzone .btn,
+.raster-upload-dropzone .btn {
   width: 100%;
   border: 0;
   border-radius: 0.55rem !important;
@@ -92,7 +107,12 @@ body {
   font-weight: 700;
 }
 
-.geo-upload-dropzone .form-control {
+.geo-upload-dropzone .form-control,
+.raster-upload-dropzone .form-control {
+  display: block;
+  width: 100% !important;
+  flex: none !important;
+  box-sizing: border-box;
   min-height: 4.4rem;
   border: 2px dashed rgba(23, 107, 91, 0.38);
   border-radius: 0.7rem !important;
@@ -102,7 +122,9 @@ body {
 }
 
 .geo-upload-dropzone .form-control:hover,
-.geo-upload-dropzone .form-control:focus {
+.geo-upload-dropzone .form-control:focus,
+.raster-upload-dropzone .form-control:hover,
+.raster-upload-dropzone .form-control:focus {
   border-color: var(--ls-accent);
   background: rgba(23, 107, 91, 0.08);
   box-shadow: 0 0 0 0.18rem rgba(23, 107, 91, 0.12);

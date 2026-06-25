@@ -78,6 +78,18 @@ analysis_ui <- function(id) {
               class = "btn-outline-secondary"
             )
           ),
+          shiny::div(
+            class = "raster-upload-dropzone",
+            shiny::fileInput(
+              ns("raster_upload"),
+              label = "",
+              multiple = TRUE,
+              accept = c(".tif", ".tiff", ".img", ".vrt", ".grd", ".zip"),
+              buttonLabel = "Selecionar ou arrastar pasta/raster(s)",
+              placeholder = "Solte aqui uma pasta, .tif/.tiff ou ZIP com os rasters"
+            )
+          ),
+          shiny::helpText("Você pode selecionar uma pasta local pelo botão acima ou arrastar/selecionar uma pasta, rasters ou ZIP nesta caixa."),
           shiny::uiOutput(ns("raster_folder_display")),
           shiny::selectInput(
             ns("mapbiomas"),
@@ -168,6 +180,7 @@ analysis_server <- function(id) {
     pixel_area_value <- shiny::reactiveVal(NULL)
     pixel_area_summary <- shiny::reactiveVal("—")
     raster_folder_path <- shiny::reactiveVal("")
+    raster_folder_label <- shiny::reactiveVal("")
     raster_validation_token <- shiny::reactiveVal(0L)
     running <- shiny::reactiveVal(FALSE)
     job_process <- shiny::reactiveVal(NULL)
@@ -175,10 +188,18 @@ analysis_server <- function(id) {
     job_result_file <- shiny::reactiveVal(NULL)
     progress_state <- shiny::reactiveVal(list(percent = 0, stage = "Aguardando", detail = "", status = "idle"))
 
-    directory_roots <- c(
+    root_candidates <- c(
       "Pasta pessoal" = path.expand("~"),
+      "Desktop" = file.path(path.expand("~"), "Desktop"),
+      "Downloads" = file.path(path.expand("~"), "Downloads"),
       "Projeto LandScriptDeforestMap" = normalizePath(file.path(app_root(), ".."), mustWork = TRUE),
-      shinyFiles::getVolumes()()
+      "Discos externos" = "/Volumes",
+      "Sistema" = .Platform$file.sep
+    )
+    root_candidates <- root_candidates[dir.exists(root_candidates)]
+    directory_roots <- stats::setNames(
+      normalizePath(unname(root_candidates), mustWork = TRUE),
+      names(root_candidates)
     )
     shinyFiles::shinyDirChoose(
       input,
@@ -221,6 +242,39 @@ analysis_server <- function(id) {
       invisible(NULL)
     }
 
+    schedule_uploaded_raster_validation <- function(upload, token) {
+      run_upload_validation <- function() {
+        if (!identical(token, raster_validation_token())) {
+          return(invisible(NULL))
+        }
+        tryCatch({
+          set_raster_validation_progress(
+            2,
+            "Carregando arquivos",
+            "Copiando arquivos enviados para a sessão."
+          )
+          upload_dir <- file.path(session_dir, paste0("rasters_", token, "_", as.integer(Sys.time())))
+          staged_folder <- stage_raster_upload(upload, upload_dir)
+          if (!identical(token, raster_validation_token())) {
+            return(invisible(NULL))
+          }
+          raster_folder_path(staged_folder)
+          raster_folder_label(paste0("Upload: ", nrow(upload), " arquivo(s) enviado(s)"))
+          validate_rasters()
+        }, error = function(e) {
+          if (identical(token, raster_validation_token())) {
+            raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
+          }
+        })
+      }
+
+      session$onFlushed(function() {
+        later::later(run_upload_validation, delay = 0.15)
+      }, once = TRUE)
+
+      invisible(NULL)
+    }
+
     load_geospatial_file <- function(path, source_label = NULL) {
       geo <- read_geo(path)
       geo_path(path)
@@ -249,6 +303,7 @@ analysis_server <- function(id) {
         token <- raster_validation_token() + 1L
         raster_validation_token(token)
         raster_folder_path(selected_path)
+        raster_folder_label(selected_path)
         validation_state(NULL)
         pixel_area_value(NULL)
         pixel_area_summary("—")
@@ -261,9 +316,28 @@ analysis_server <- function(id) {
       }
     }, ignoreInit = TRUE)
 
+    shiny::observeEvent(input$raster_upload, {
+      upload <- input$raster_upload
+      if (is.null(upload) || !nrow(upload)) return(NULL)
+      token <- raster_validation_token() + 1L
+      raster_validation_token(token)
+      raster_folder_path("")
+      raster_folder_label("Upload: preparando arquivos enviados...")
+      validation_state(NULL)
+      pixel_area_value(NULL)
+      pixel_area_summary("—")
+      set_raster_validation_progress(
+        1,
+        "Carregando arquivos",
+        "Arquivos recebidos pelo Shiny. Preparando validação."
+      )
+      schedule_uploaded_raster_validation(upload, token)
+    }, ignoreInit = TRUE)
+
     shiny::observeEvent(input$clear_raster_folder, {
       raster_validation_token(raster_validation_token() + 1L)
       raster_folder_path("")
+      raster_folder_label("")
       validation_state(NULL)
       raster_validation_state(NULL)
       pixel_area_value(NULL)
@@ -272,7 +346,8 @@ analysis_server <- function(id) {
 
     output$raster_folder_display <- shiny::renderUI({
       path <- raster_folder_path()
-      if (!nzchar(path)) {
+      label <- raster_folder_label()
+      if (!nzchar(path) && !nzchar(label)) {
         return(shiny::div(
           class = "folder-selection folder-selection-empty",
           shiny::icon("folder-open"),
@@ -282,7 +357,7 @@ analysis_server <- function(id) {
       shiny::div(
         class = "folder-selection",
         shiny::icon("folder"),
-        shiny::span(path, title = path)
+        shiny::span(label %||% path, title = path)
       )
     })
 
@@ -340,7 +415,7 @@ analysis_server <- function(id) {
         geo,
         mesh.size = size,
         group.column = input$group_column %||% ".ALL",
-        max.cells = 10000L,
+        max.cells = 500000L,
         mesh.unit = "meters"
       )
     })
@@ -540,7 +615,7 @@ analysis_server <- function(id) {
           mapbiomas = input$mapbiomas,
           custom_classes = custom_classes(),
           pixel_km2_ratio = pixel_area_value(),
-          max_cells = 50000L
+          max_cells = 1000000L
         )
 
         progress_file <- file.path(session_dir, "progress.json")

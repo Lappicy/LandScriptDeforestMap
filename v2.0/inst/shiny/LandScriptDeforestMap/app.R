@@ -1,7 +1,7 @@
 app_directory <- normalizePath(getwd(), mustWork = TRUE)
 options(
   landscript.app_dir = app_directory,
-  shiny.maxRequestSize = 1024^3,
+  shiny.maxRequestSize = 20 * 1024^3,
   scipen = 9999
 )
 
@@ -133,7 +133,24 @@ ui <- bslib::page_navbar(
          });
          Shiny.addCustomMessageHandler('landscript-reset', function(x) {
            window.location.reload();
-         });"
+         });
+         (function enableRasterDirectoryUpload() {
+           function applyRasterDirectoryAttributes() {
+             var inputs = document.querySelectorAll('input[type=\"file\"][id$=\"raster_upload\"]');
+             inputs.forEach(function(input) {
+               input.setAttribute('multiple', 'multiple');
+               input.setAttribute('webkitdirectory', '');
+               input.setAttribute('directory', '');
+             });
+           }
+           if (document.readyState === 'loading') {
+             document.addEventListener('DOMContentLoaded', applyRasterDirectoryAttributes);
+           } else {
+             applyRasterDirectoryAttributes();
+           }
+           window.setTimeout(applyRasterDirectoryAttributes, 250);
+           window.setTimeout(applyRasterDirectoryAttributes, 1000);
+         })();"
       ))
     )
   ),

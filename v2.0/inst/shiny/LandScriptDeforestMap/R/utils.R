@@ -104,6 +104,7 @@ list_raster_files <- function(folder) {
     folder,
     pattern = "\\.(tif|tiff|img|vrt|grd)$",
     full.names = TRUE,
+    recursive = TRUE,
     ignore.case = TRUE
   )
   files <- files[file.info(files)$isdir %in% FALSE]
@@ -469,6 +470,33 @@ stage_uploaded_vector <- function(upload, destination) {
   }
 
   stage_vector_files(copied, destination, source = "upload")
+}
+
+stage_raster_upload <- function(upload, destination) {
+  if (is.null(upload) || !nrow(upload)) {
+    stop("Selecione ou arraste os rasters classificados.", call. = FALSE)
+  }
+
+  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+  copied <- file.path(destination, basename(upload$name))
+  ok <- file.copy(upload$datapath, copied, overwrite = TRUE)
+  if (!all(ok)) {
+    stop("Não foi possível preparar todos os rasters enviados.", call. = FALSE)
+  }
+
+  zip_files <- copied[tolower(tools::file_ext(copied)) == "zip"]
+  if (length(zip_files)) {
+    for (i in seq_along(zip_files)) {
+      safe_extract_zip(
+        zip_files[[i]],
+        file.path(destination, paste0("zip_extracted_", i)),
+        max_files = 5000L,
+        max_uncompressed_bytes = 20 * 1024^3
+      )
+    }
+  }
+
+  normalizePath(destination, mustWork = TRUE)
 }
 
 copy_upload_to_named_file <- function(upload, destination) {
