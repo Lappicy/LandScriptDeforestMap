@@ -189,6 +189,31 @@ body {
   height: 1.1rem;
 }
 
+.results-table-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.8rem 1rem;
+  width: 100%;
+}
+
+.results-level-control {
+  flex: 1 1 14rem;
+  max-width: 22rem;
+}
+
+.results-level-control .shiny-input-container {
+  margin-bottom: 0;
+}
+
+.results-download-button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0.5rem;
+  font-weight: 700;
+}
+
 .field-hint {
   margin: -0.55rem 0 0.75rem;
   color: var(--ls-muted);

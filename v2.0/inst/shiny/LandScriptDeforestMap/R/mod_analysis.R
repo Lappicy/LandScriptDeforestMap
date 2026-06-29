@@ -120,20 +120,25 @@ analysis_ui <- function(id) {
         shiny::uiOutput(ns("result_summary")),
         bslib::card(
           bslib::card_header(
-            shiny::selectInput(
-              ns("result_level"),
-              "Nível exibido",
-              choices = c("Malha" = "mesh", "Grupos" = "groups", "Total" = "total"),
-              selected = "mesh"
+            shiny::div(
+              class = "results-table-header",
+              shiny::div(
+                class = "results-level-control",
+                shiny::selectInput(
+                  ns("result_level"),
+                  "Nível exibido",
+                  choices = c("Malha" = "mesh", "Grupos" = "groups", "Total" = "total"),
+                  selected = "mesh"
+                )
+              ),
+              shiny::downloadButton(
+                ns("download_all"),
+                "Download resultados (.zip)",
+                class = "btn-primary results-download-button"
+              )
             )
           ),
           DT::DTOutput(ns("result_table"))
-        ),
-        shiny::downloadButton(
-          ns("download_all"),
-          "Download resultados (.zip)",
-          class = "visually-hidden",
-          style = "display:none;"
         )
       )
     )
@@ -696,29 +701,10 @@ analysis_server <- function(id) {
         table_data,
         rownames = FALSE,
         filter = "top",
-        extensions = "Buttons",
         options = list(
           scrollX = TRUE,
           pageLength = 15,
-          dom = "Bfrtip",
-          buttons = list(
-            list(
-              extend = "copy",
-              text = "Download resultados (.zip)",
-              className = "btn-download-results",
-              action = DT::JS(sprintf(
-                "function(e, dt, node, config) {
-                   var link = document.getElementById('%s');
-                   if (link && link.href) {
-                     window.location.href = link.href;
-                   } else if (link) {
-                     link.click();
-                   }
-                 }",
-                ns("download_all")
-              ))
-            )
-          ),
+          dom = "frtip",
           language = list(
             search = "Pesquisar:",
             lengthMenu = "Mostrar _MENU_ linhas",

@@ -631,7 +631,27 @@ prepare_result_download_zip <- function(result, destination) {
     stop("Nenhum resultado está disponível para download.", call. = FALSE)
   }
 
-  files <- unname(result$files[file.exists(result$files)])
+  wanted_keys <- c(
+    "complete_xlsx",
+    "simplified_xlsx",
+    "complete_gpkg",
+    "simplified_gpkg"
+  )
+  files <- result$files[wanted_keys]
+  missing_keys <- wanted_keys[
+    is.na(files) |
+      !nzchar(files) |
+      !file.exists(files)
+  ]
+  if (length(missing_keys)) {
+    stop(
+      "Não foi possível encontrar todos os arquivos finais para o ZIP: ",
+      paste(missing_keys, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  files <- unname(files)
   files <- normalizePath(files, mustWork = TRUE)
   files <- files[file.info(files)$isdir %in% FALSE]
   if (!length(files)) {
@@ -642,7 +662,6 @@ prepare_result_download_zip <- function(result, destination) {
   dir.create(staging, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(staging, recursive = TRUE, force = TRUE), add = TRUE)
 
-  output_root <- normalizePath(result$output_folder %||% dirname(files[[1]]), mustWork = FALSE)
   file_names <- basename(files)
   if (anyDuplicated(file_names)) {
     file_names <- make.unique(file_names, sep = "_")
@@ -658,20 +677,6 @@ prepare_result_download_zip <- function(result, destination) {
     failed <- basename(files[!copied])
     stop("Não foi possível copiar para o ZIP: ", paste(failed, collapse = ", "), call. = FALSE)
   }
-
-  manifest <- file.path(staging, "README_resultados.txt")
-  writeLines(
-    c(
-      "LandScriptDeforestMap - resultados da análise",
-      paste0("Nome da análise: ", result$output_name %||% "LandScript_result"),
-      paste0("Pasta original de saída: ", output_root),
-      "",
-      "Arquivos incluídos:",
-      paste0("- ", sort(list.files(staging)))
-    ),
-    manifest,
-    useBytes = TRUE
-  )
 
   zip_files <- list.files(staging, all.files = FALSE, recursive = FALSE)
   zip::zipr(destination, files = zip_files, root = staging)
