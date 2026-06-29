@@ -10,7 +10,7 @@ required_packages <- function() {
   c(
     "shiny", "bslib", "leaflet", "sf", "terra", "dplyr", "tidyr",
     "ggplot2", "ggspatial", "DT", "callr", "processx", "jsonlite",
-    "zip", "htmltools", "scales", "shinyFiles", "writexl", "rosm",
+    "zip", "htmltools", "scales", "shinyFiles", "writexl", "readxl", "rosm",
     "prettymapr", "later"
   )
 }
@@ -595,6 +595,34 @@ select_preferred_result_file <- function(files) {
     ))
   }
 
+  vector_files <- files[extensions %in% c(supported_vector_extensions(), shapefile_extensions())]
+  if (length(vector_files)) {
+    selected <- select_primary_vector_file(vector_files)
+    layers <- tryCatch(sf::st_layers(selected)$name, error = function(e) character())
+    return(list(
+      path = selected,
+      type = "arquivo geoespacial",
+      layers = layers,
+      spatial = TRUE
+    ))
+  }
+
+  excel_files <- files[extensions == "xlsx"]
+  if (length(excel_files)) {
+    selected <- excel_files[[which.max(file.info(excel_files)$size)]]
+    layers <- if (requireNamespace("readxl", quietly = TRUE)) {
+      tryCatch(readxl::excel_sheets(selected), error = function(e) character())
+    } else {
+      character()
+    }
+    return(list(
+      path = selected,
+      type = "Excel",
+      layers = layers,
+      spatial = FALSE
+    ))
+  }
+
   rds_files <- files[extensions == "rds"]
   if (length(rds_files)) {
     valid <- vapply(rds_files, function(path) {
@@ -616,12 +644,12 @@ select_preferred_result_file <- function(files) {
       !grepl("simplificado|calcrasterpixels", names_lower)
     if (any(eligible)) tables <- tables[eligible]
     selected <- tables[[which.max(file.info(tables)$size)]]
-    return(list(path = selected, type = "tabela completa", layers = NULL))
+    return(list(path = selected, type = "tabela completa", layers = NULL, spatial = FALSE))
   }
 
   stop(
     "O ZIP não contém um resultado compatível. Inclua o GeoPackage completo, ",
-    "o arquivo RDS completo ou a tabela completa.",
+    "um shapefile completo, um Excel ou uma tabela completa.",
     call. = FALSE
   )
 }

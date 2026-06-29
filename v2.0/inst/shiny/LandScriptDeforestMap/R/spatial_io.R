@@ -290,6 +290,25 @@ read_result_dataset <- function(path, layer = NULL) {
     }
     return(drop_zm_geometry(data))
   }
+  if (extension %in% setdiff(supported_vector_extensions(), "gpkg")) {
+    data <- sf::st_read(path, quiet = TRUE)
+    if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
+      stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
+    }
+    return(drop_zm_geometry(data))
+  }
+  if (extension == "xlsx") {
+    if (!requireNamespace("readxl", quietly = TRUE)) {
+      stop("Para ler arquivos .xlsx, instale o pacote readxl.", call. = FALSE)
+    }
+    sheets <- readxl::excel_sheets(path)
+    if (!length(sheets)) {
+      stop("O arquivo Excel não possui planilhas.", call. = FALSE)
+    }
+    selected <- layer %||% if ("Malha" %in% sheets) "Malha" else sheets[[1]]
+    if (!selected %in% sheets) selected <- sheets[[1]]
+    return(as.data.frame(readxl::read_excel(path, sheet = selected, .name_repair = "minimal")))
+  }
   if (extension %in% c("csv")) {
     return(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE))
   }

@@ -33,6 +33,7 @@ Imports:
     prettymapr,
     processx,
     raster,
+    readxl,
     rosm,
     scales,
     sf,

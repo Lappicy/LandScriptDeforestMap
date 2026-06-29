@@ -13,12 +13,17 @@ visuals_ui <- function(id) {
         col_widths = c(4, 4, 4),
         shiny::fileInput(
           ns("manual_result"),
-          "Carregar resultados: ZIP, GeoPackage ou tabela (opcional)",
-          accept = c(".zip", ".gpkg", ".txt", ".tsv", ".csv", ".rds")
+          "Carregar resultados: ZIP, GeoPackage, shapefile ou tabela (opcional)",
+          multiple = TRUE,
+          accept = c(
+            ".zip", ".gpkg", ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj",
+            ".geojson", ".json", ".kml", ".gml",
+            ".xlsx", ".txt", ".tsv", ".csv", ".rds"
+          )
         ),
         shiny::selectInput(
           ns("gpkg_layer"),
-          "Camada do GeoPackage",
+          "Camada ou planilha",
           choices = c("mesh", "groups", "total"),
           selected = "mesh"
         ),
@@ -95,6 +100,7 @@ visuals_server <- function(id, automatic_result) {
     manual_layers <- shiny::reactiveVal(NULL)
     manual_error <- shiny::reactiveVal(NULL)
     manual_source <- shiny::reactiveVal(NULL)
+    manual_kind <- shiny::reactiveVal(NULL)
     plot_language <- shiny::reactiveVal("pt-BR")
     upload_dir <- tempfile("landscript_visual_")
     dir.create(upload_dir, recursive = TRUE)
@@ -157,19 +163,24 @@ visuals_server <- function(id, automatic_result) {
 
     shiny::observeEvent(input$manual_result, {
       tryCatch({
-        path <- copy_upload_to_named_file(input$manual_result, upload_dir)
+        upload <- input$manual_result
+        if (is.null(upload) || !nrow(upload)) return(NULL)
         manual_error(NULL)
+        manual_kind(NULL)
 
         source <- list(
-          uploaded = basename(path),
-          selected = basename(path),
+          uploaded = paste(upload$name, collapse = ", "),
+          selected = paste(upload$name, collapse = ", "),
           selected_type = NULL,
           from_zip = FALSE
         )
-        selected_path <- path
-        extension <- tolower(tools::file_ext(path))
 
-        if (extension == "zip") {
+        extensions <- tolower(tools::file_ext(upload$name))
+        selected_path <- NULL
+        extension <- NULL
+
+        if (length(upload$name) == 1L && extensions[[1]] == "zip") {
+          path <- copy_upload_to_named_file(upload, upload_dir)
           extract_dir <- tempfile("landscript_results_", tmpdir = upload_dir)
           extracted <- safe_extract_zip(path, extract_dir)
           selected <- select_preferred_result_file(extracted)
@@ -181,6 +192,20 @@ visuals_server <- function(id, automatic_result) {
             selected_type = selected$type,
             from_zip = TRUE
           )
+        } else if (any(extensions %in% c(supported_vector_extensions(), shapefile_extensions()))) {
+          vector_dir <- file.path(upload_dir, paste0("vector_", as.integer(Sys.time())))
+          selected_path <- stage_uploaded_vector(upload, vector_dir)
+          extension <- tolower(tools::file_ext(selected_path))
+          source <- list(
+            uploaded = paste(upload$name, collapse = ", "),
+            selected = basename(selected_path),
+            selected_type = "arquivo geoespacial",
+            from_zip = FALSE
+          )
+        } else {
+          path <- copy_upload_to_named_file(upload, upload_dir)
+          selected_path <- path
+          extension <- tolower(tools::file_ext(path))
         }
 
         if (extension == "gpkg") {
@@ -188,6 +213,24 @@ visuals_server <- function(id, automatic_result) {
           if (!length(layers)) stop("O GeoPackage selecionado não possui camadas.", call. = FALSE)
           manual_layers(layers)
           shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = if ("mesh" %in% layers) "mesh" else layers[[1]])
+          manual_kind("spatial")
+        } else if (extension %in% setdiff(supported_vector_extensions(), "gpkg")) {
+          manual_layers(NULL)
+          shiny::updateSelectInput(session, "gpkg_layer", choices = c("Camada única" = ""), selected = "")
+          manual_kind("spatial")
+        } else if (extension == "xlsx") {
+          if (!requireNamespace("readxl", quietly = TRUE)) {
+            stop("Para ler arquivos .xlsx, instale o pacote readxl.", call. = FALSE)
+          }
+          sheets <- readxl::excel_sheets(selected_path)
+          if (!length(sheets)) stop("O arquivo Excel não possui planilhas.", call. = FALSE)
+          manual_layers(sheets)
+          shiny::updateSelectInput(session, "gpkg_layer", choices = sheets, selected = if ("Malha" %in% sheets) "Malha" else sheets[[1]])
+          manual_kind("table")
+        } else if (extension %in% c("txt", "tsv", "csv")) {
+          manual_layers(NULL)
+          shiny::updateSelectInput(session, "gpkg_layer", choices = c("Tabela" = ""), selected = "")
+          manual_kind("table")
         } else if (extension == "rds") {
           object <- readRDS(selected_path)
           layers <- if (is.list(object) && all(c("mesh", "groups", "total") %in% names(object))) {
@@ -199,8 +242,10 @@ visuals_server <- function(id, automatic_result) {
           if (length(layers)) {
             shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = "mesh")
           }
+          manual_kind("table")
         } else {
           manual_layers(NULL)
+          manual_kind("table")
         }
 
         manual_path(selected_path)
@@ -209,6 +254,7 @@ visuals_server <- function(id, automatic_result) {
         manual_error(conditionMessage(e))
         manual_path(NULL)
         manual_source(NULL)
+        manual_kind(NULL)
       })
     })
 
@@ -234,9 +280,9 @@ visuals_server <- function(id, automatic_result) {
           data <- current_data()
           source <- manual_source()
           detail <- if (inherits(data, "sf")) {
+            layer_label <- input$gpkg_layer %||% ""
             paste0(
-              " — camada ", input$gpkg_layer,
-              ", ",
+              if (nzchar(layer_label)) paste0(" — camada ", layer_label, ", ") else " — ",
               format(nrow(data), big.mark = ".", decimal.mark = ","),
               " registros com geometria"
             )
@@ -254,6 +300,12 @@ visuals_server <- function(id, automatic_result) {
             )
           } else {
             paste0("Usando arquivo manual: ", source$selected %||% basename(manual_path()))
+          }
+          if (!inherits(data, "sf")) {
+            return(app_alert(
+              paste0(origin, detail, ". Para criação de mapas, é necessário arquivo geoespacial."),
+              color = "warning"
+            ))
           }
           app_alert(
             paste0(origin, detail),
@@ -284,17 +336,26 @@ visuals_server <- function(id, automatic_result) {
       }
       shiny::updateSelectInput(session, "primary_column", choices = numeric_columns, selected = default_primary)
       shiny::updateSelectizeInput(session, "comparison_columns", choices = numeric_columns, selected = default_comparison, server = TRUE)
-      shiny::updateSelectInput(session, "map_class", choices = numeric_columns, selected = default_primary)
 
       years <- if ("Year" %in% names(data)) sort(unique(as.integer(as.character(data$Year)))) else integer()
-      shiny::updateSelectizeInput(session, "map_years", choices = years, selected = years, server = TRUE)
 
       non_numeric <- names(data)[
         !vapply(data, is.numeric, logical(1))
       ]
       non_numeric <- setdiff(non_numeric, c("AnalysisLevel"))
       shiny::updateSelectInput(session, "chart_group", choices = c("Sem agrupamento" = "", stats::setNames(non_numeric, non_numeric)))
-      shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = "", stats::setNames(non_numeric, non_numeric)))
+
+      spatial_data <- tryCatch(current_data(), error = function(e) NULL)
+      if (inherits(spatial_data, "sf")) {
+        shiny::updateSelectInput(session, "map_class", choices = numeric_columns, selected = default_primary)
+        shiny::updateSelectizeInput(session, "map_years", choices = years, selected = years, server = TRUE)
+        shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = "", stats::setNames(non_numeric, non_numeric)))
+      } else {
+        shiny::updateSelectInput(session, "map_class", choices = character(), selected = character())
+        shiny::updateSelectizeInput(session, "map_years", choices = character(), selected = character(), server = TRUE)
+        shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = ""), selected = "")
+        shiny::updateSelectInput(session, "highlight", choices = c("Nenhuma" = ""), selected = "")
+      }
     })
 
     shiny::observe({
@@ -334,7 +395,9 @@ visuals_server <- function(id, automatic_result) {
 
     map_object <- shiny::reactive({
       data <- current_data()
-      shiny::validate(shiny::need(inherits(data, "sf"), "Para gerar o mapa, carregue um GeoPackage ou use o resultado automático."))
+      if (!inherits(data, "sf")) {
+        return(NULL)
+      }
       mesh.map(
         data,
         class = input$map_class,
@@ -353,7 +416,14 @@ visuals_server <- function(id, automatic_result) {
 
     output$result_map <- shiny::renderPlot({
       tryCatch(
-        map_object(),
+        {
+          map <- map_object()
+          if (is.null(map)) {
+            graphics::plot.new()
+            return(invisible(NULL))
+          }
+          map
+        },
         error = function(e) {
           graphics::plot.new()
           graphics::text(0.5, 0.5, conditionMessage(e), cex = 1.1)
@@ -386,7 +456,13 @@ visuals_server <- function(id, automatic_result) {
         prefix <- if (plot_language() == "pt-BR") "mapa_resultados" else "results_map"
         paste0(prefix, ".", input$map_format)
       },
-      content = function(file) save_plot(map_object(), file, input$map_format, input$map_width, input$map_height)
+      content = function(file) {
+        map <- map_object()
+        if (is.null(map)) {
+          stop("Para criação de mapas, é necessário arquivo geoespacial.", call. = FALSE)
+        }
+        save_plot(map, file, input$map_format, input$map_width, input$map_height)
+      }
     )
 
     session$onSessionEnded(function() safe_unlink(upload_dir))

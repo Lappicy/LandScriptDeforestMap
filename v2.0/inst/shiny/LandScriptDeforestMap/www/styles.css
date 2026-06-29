@@ -122,12 +122,13 @@ body {
   flex: none !important;
   flex-basis: 100% !important;
   box-sizing: border-box;
-  min-height: 4.4rem;
+  min-height: 5.2rem;
   border: 2px dashed rgba(23, 107, 91, 0.38);
   border-radius: 0.7rem !important;
   background: rgba(23, 107, 91, 0.045);
   color: var(--ls-muted);
   cursor: pointer;
+  white-space: normal;
 }
 
 .geo-upload-dropzone input[type="file"],
@@ -151,6 +152,26 @@ body {
   border-color: var(--ls-accent);
   background: rgba(23, 107, 91, 0.12);
   box-shadow: 0 0 0 0.22rem rgba(23, 107, 91, 0.16);
+}
+
+.geo-upload-dropzone .progress,
+.raster-upload-dropzone .progress {
+  background-color: rgba(23, 107, 91, 0.12) !important;
+}
+
+.geo-upload-dropzone .progress-bar,
+.raster-upload-dropzone .progress-bar,
+.geo-upload-dropzone .bar,
+.raster-upload-dropzone .bar {
+  background-color: var(--ls-accent) !important;
+  border-color: var(--ls-accent) !important;
+}
+
+.geo-upload-dropzone .progress-bar-danger,
+.raster-upload-dropzone .progress-bar-danger,
+.geo-upload-dropzone .bg-danger,
+.raster-upload-dropzone .bg-danger {
+  background-color: var(--ls-accent) !important;
 }
 
 .progress-status {

@@ -23,10 +23,9 @@ analysis_ui <- function(id) {
                 ".kml", ".gml"
               ),
               buttonLabel = "Selecionar ou arrastar arquivo(s)",
-              placeholder = "Insira aqui o arquivo .gpkg, .shp, .zip, ou .json"
+              placeholder = "Inserir o arquivo .gpkg, .shp, .zip, ou .json"
             ),
           ),
-          shiny::helpText("Para shapefile, envie um .zip ou selecione/arraste .shp, .shx, .dbf e .prj juntos."),
           shiny::selectInput(ns("group_column"), "Coluna de limites/grupos", choices = NULL)
         ),
         bslib::accordion_panel(
@@ -60,10 +59,9 @@ analysis_ui <- function(id) {
               multiple = TRUE,
               accept = c(".tif", ".tiff", ".img", ".vrt", ".grd", ".zip"),
               buttonLabel = "Selecionar ou arrastar pasta/raster(s)",
-              placeholder = "Solte aqui uma pasta, .tif/.tiff ou ZIP com os rasters"
+              placeholder = "Inserir pasta ou arquivos .tif/.tiff com as imagens classificadas"
             )
           ),
-          shiny::helpText("Você pode selecionar/arrastar uma pasta, rasters ou ZIP nesta caixa."),
           shiny::uiOutput(ns("raster_folder_display")),
           shiny::selectInput(
             ns("mapbiomas"),
