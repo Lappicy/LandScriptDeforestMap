@@ -6,11 +6,65 @@ drop_zm_geometry <- function(geo) {
   )
 }
 
-safe_st_union <- function(x, y = NULL) {
-  if (is.null(y)) {
-    return(suppressMessages(suppressWarnings(sf::st_union(x))))
+repair_polygon_geometry <- function(geo) {
+  if (!inherits(geo, c("sf", "sfc", "sfg"))) return(geo)
+  if (inherits(geo, "sfg")) geo <- sf::st_sfc(geo)
+
+  repaired <- tryCatch(
+    suppressWarnings(sf::st_make_valid(geo)),
+    error = function(e) geo
+  )
+  repaired <- tryCatch(
+    suppressWarnings(sf::st_collection_extract(repaired, "POLYGON")),
+    error = function(e) repaired
+  )
+
+  if (inherits(repaired, "sf")) {
+    repaired <- drop_zm_geometry(repaired)
+    empty <- sf::st_is_empty(repaired)
+    if (any(empty)) repaired <- repaired[!empty, , drop = FALSE]
+    if (nrow(repaired)) sf::st_geometry(repaired) <- "geometry"
+  } else if (inherits(repaired, "sfc")) {
+    empty <- sf::st_is_empty(repaired)
+    if (any(empty)) repaired <- repaired[!empty]
   }
-  suppressMessages(suppressWarnings(sf::st_union(x, y)))
+
+  repaired
+}
+
+safe_st_union <- function(x, y = NULL) {
+  result <- if (is.null(y)) {
+    suppressMessages(suppressWarnings(sf::st_union(x)))
+  } else {
+    suppressMessages(suppressWarnings(sf::st_union(x, y)))
+  }
+  repair_polygon_geometry(result)
+}
+
+invalid_geometry_message <- function() {
+  "arquivo com geometria inválida, favor corrigir ele e tentar novamente"
+}
+
+validate_shapefile_geometry <- function(file_name) {
+  if (is.null(file_name) || !length(file_name) || !file.exists(file_name[[1]])) {
+    return(invisible(TRUE))
+  }
+  file_name <- normalizePath(file_name[[1]], mustWork = TRUE)
+  if (!identical(tolower(tools::file_ext(file_name)), "shp")) {
+    return(invisible(TRUE))
+  }
+
+  geo <- sf::st_read(file_name, quiet = TRUE, stringsAsFactors = FALSE)
+  if (!inherits(geo, "sf") || !nrow(geo)) {
+    return(invisible(TRUE))
+  }
+
+  valid_geometry <- suppressWarnings(sf::st_is_valid(geo))
+  if (any(!valid_geometry | is.na(valid_geometry))) {
+    stop(invalid_geometry_message(), call. = FALSE)
+  }
+
+  invisible(TRUE)
 }
 
 read_geo <- function(file_name, projection_wanted = 4326, layer = NULL) {
@@ -123,31 +177,39 @@ meters_to_degree_equivalent <- function(meters, geo = NULL) {
 
 prepare_group_boundaries <- function(geo, group_column = NULL) {
   geo <- read_geo(geo)
+  output_crs <- sf::st_crs(geo)
+  working_crs <- local_metric_crs(geo)
+  working_geo <- repair_polygon_geometry(sf::st_transform(geo, working_crs))
+
   previous_s2 <- sf::sf_use_s2()
-  if (isTRUE(sf::st_is_longlat(geo))) {
-    suppressMessages(sf::sf_use_s2(FALSE))
-    on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
-  }
+  suppressMessages(sf::sf_use_s2(FALSE))
+  on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
 
   if (is.null(group_column) || !nzchar(group_column) || identical(group_column, ".ALL")) {
     group_column <- "BoundaryGroup"
-    geo[[group_column]] <- factor("Área total")
+    working_geo[[group_column]] <- factor("Área total")
   } else {
-    if (!group_column %in% names(sf::st_drop_geometry(geo))) {
+    if (!group_column %in% names(sf::st_drop_geometry(working_geo))) {
       stop("A coluna de limites selecionada não existe no arquivo.", call. = FALSE)
     }
-    values <- as.character(geo[[group_column]])
+    values <- as.character(working_geo[[group_column]])
     values[is.na(values) | !nzchar(trimws(values))] <- "Sem valor"
-    geo[[group_column]] <- factor(values)
+    working_geo[[group_column]] <- factor(values)
   }
 
-  split_geo <- split(geo, as.character(geo[[group_column]]), drop = TRUE)
+  split_geo <- split(working_geo, as.character(working_geo[[group_column]]), drop = TRUE)
   dissolved <- lapply(names(split_geo), function(level) {
     geometry <- safe_st_union(sf::st_geometry(split_geo[[level]]))
+    geometry <- repair_polygon_geometry(sf::st_sfc(geometry, crs = sf::st_crs(working_geo)))
+    if (!length(geometry) || all(sf::st_is_empty(geometry))) return(NULL)
     out <- data.frame(value = level, stringsAsFactors = FALSE)
     names(out) <- group_column
-    sf::st_sf(out, geometry = sf::st_sfc(geometry, crs = sf::st_crs(geo)))
+    sf::st_sf(out, geometry = geometry)
   })
+  dissolved <- Filter(Negate(is.null), dissolved)
+  if (!length(dissolved)) {
+    stop("Não foi possível criar limites válidos a partir da coluna selecionada.", call. = FALSE)
+  }
   boundaries <- do.call(rbind, dissolved)
   rownames(boundaries) <- NULL
 
@@ -159,11 +221,12 @@ prepare_group_boundaries <- function(geo, group_column = NULL) {
     overlap_removed <- FALSE
 
     for (i in seq_len(nrow(boundaries))) {
-      current <- boundaries[i, , drop = FALSE]
+      current <- repair_polygon_geometry(boundaries[i, , drop = FALSE])
       if (!is.null(assigned)) {
         relation <- suppressWarnings(sf::st_relate(current, assigned, pattern = "T********"))
         overlap_removed <- overlap_removed || any(lengths(relation) > 0L)
         current <- suppressMessages(suppressWarnings(sf::st_difference(current, assigned)))
+        current <- repair_polygon_geometry(current)
       }
       if (nrow(current) && !all(sf::st_is_empty(current))) {
         cleaned[[i]] <- current
@@ -184,6 +247,14 @@ prepare_group_boundaries <- function(geo, group_column = NULL) {
     attr(boundaries, "overlap_removed") <- FALSE
   }
 
+  boundaries <- repair_polygon_geometry(boundaries)
+  if (!nrow(boundaries)) {
+    stop("Não foi possível criar limites válidos a partir da coluna selecionada.", call. = FALSE)
+  }
+  boundaries <- repair_polygon_geometry(sf::st_transform(boundaries, output_crs))
+  if (!nrow(boundaries)) {
+    stop("Não foi possível criar limites válidos a partir da coluna selecionada.", call. = FALSE)
+  }
   boundaries[[group_column]] <- factor(boundaries[[group_column]])
   sf::st_geometry(boundaries) <- "geometry"
   attr(boundaries, "group_column") <- group_column

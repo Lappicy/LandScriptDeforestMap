@@ -67,7 +67,7 @@ analysis_ui <- function(id) {
             ns("mapbiomas"),
             "Legenda MAPBIOMAS",
             choices = c("Coleção 4" = "4", "Coleção 7.1" = "7.1", "Coleção 8" = "8", "Coleção 10" = "10", "Personalizada" = "custom"),
-            selected = "8"
+            selected = "10"
           ),
           shiny::conditionalPanel(
             condition = sprintf("input['%s'] === 'custom'", ns("mapbiomas")),
@@ -78,7 +78,23 @@ analysis_ui <- function(id) {
             shiny::textInput(ns("class_agriculture"), "Agricultura", ""),
             shiny::textInput(ns("class_pasture"), "Pastagem", "15"),
             shiny::textInput(ns("class_mining"), "Mineração", "30"),
-            shiny::textInput(ns("class_urban"), "Urbano", "24")
+            shiny::textInput(ns("class_urban"), "Urbano", "24"),
+            shiny::div(
+              class = "custom-classes-extra",
+              shiny::tags$hr(),
+              shiny::div(
+                class = "custom-classes-header",
+                shiny::strong("Classes adicionais"),
+                shiny::actionButton(
+                  ns("add_custom_class"),
+                  "Adicionar classe",
+                  icon = shiny::icon("plus"),
+                  class = "btn-outline-primary btn-sm"
+                )
+              ),
+              shiny::helpText("Para cada classe adicional, informe o nome da classe e os números correspondentes separados por vírgula."),
+              shiny::uiOutput(ns("extra_custom_classes_ui"))
+            )
           ),
           shiny::uiOutput(ns("raster_validation_message"))
         ),
@@ -151,6 +167,7 @@ analysis_server <- function(id) {
 
     geo_path <- shiny::reactiveVal(NULL)
     geo_data <- shiny::reactiveVal(NULL)
+    geo_invalid_geometry <- shiny::reactiveVal(FALSE)
     analysis_result <- shiny::reactiveVal(NULL)
     validation_state <- shiny::reactiveVal(NULL)
     raster_validation_state <- shiny::reactiveVal(NULL)
@@ -164,6 +181,8 @@ analysis_server <- function(id) {
     job_progress_file <- shiny::reactiveVal(NULL)
     job_result_file <- shiny::reactiveVal(NULL)
     progress_state <- shiny::reactiveVal(list(percent = 0, stage = "Aguardando", detail = "", status = "idle"))
+    extra_custom_class_ids <- shiny::reactiveVal(integer())
+    next_extra_custom_class_id <- shiny::reactiveVal(0L)
 
     set_raster_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
       raster_validation_state(list(
@@ -175,6 +194,79 @@ analysis_server <- function(id) {
       try(get("flushReact", asNamespace("shiny"))(), silent = TRUE)
       invisible(NULL)
     }
+
+    toggle_run_button <- function(disabled) {
+      session$sendCustomMessage(
+        "toggle-disabled",
+        list(id = ns("run"), disabled = isTRUE(disabled))
+      )
+    }
+
+    mark_invalid_geospatial_file <- function() {
+      geo_path(NULL)
+      geo_data(NULL)
+      geo_invalid_geometry(TRUE)
+      shiny::updateSelectInput(session, "group_column", choices = NULL)
+      validation_state(list(type = "danger", text = invalid_geometry_message()))
+      toggle_run_button(TRUE)
+      invisible(NULL)
+    }
+
+    normalize_custom_class_name <- function(name) {
+      name <- trimws(as.character(name %||% ""))
+      name <- gsub("[\r\n\t]+", " ", name)
+      name <- gsub(" {2,}", " ", name)
+      if (!nzchar(name)) return("")
+      numeric_name <- suppressWarnings(as.numeric(name))
+      if (!is.na(numeric_name) || grepl("^Variation_[0-9]+$", name)) {
+        name <- paste0("Class_", name)
+      }
+      name
+    }
+
+    shiny::observeEvent(input$add_custom_class, {
+      id <- next_extra_custom_class_id() + 1L
+      next_extra_custom_class_id(id)
+      extra_custom_class_ids(c(extra_custom_class_ids(), id))
+
+      local({
+        this_id <- id
+        shiny::observeEvent(input[[paste0("remove_extra_custom_class_", this_id)]], {
+          extra_custom_class_ids(setdiff(extra_custom_class_ids(), this_id))
+        }, ignoreInit = TRUE, once = TRUE)
+      })
+    }, ignoreInit = TRUE)
+
+    output$extra_custom_classes_ui <- shiny::renderUI({
+      ids <- extra_custom_class_ids()
+      if (!length(ids)) return(NULL)
+      shiny::tagList(lapply(ids, function(id) {
+        shiny::div(
+          class = "custom-class-card",
+          shiny::div(
+            class = "custom-class-card-header",
+            shiny::strong(paste("Classe adicional", match(id, ids))),
+            shiny::actionButton(
+              ns(paste0("remove_extra_custom_class_", id)),
+              "Remover",
+              icon = shiny::icon("trash"),
+              class = "btn-outline-danger btn-sm"
+            )
+          ),
+          shiny::textInput(
+            ns(paste0("extra_custom_class_name_", id)),
+            "Nome da classe",
+            value = ""
+          ),
+          shiny::textInput(
+            ns(paste0("extra_custom_class_values_", id)),
+            "Números relacionados à classe",
+            value = "",
+            placeholder = "Ex.: 12, 13, 14"
+          )
+        )
+      }))
+    })
 
     schedule_uploaded_raster_validation <- function(upload, token) {
       run_upload_validation <- function() {
@@ -210,9 +302,11 @@ analysis_server <- function(id) {
     }
 
     load_geospatial_file <- function(path, source_label = NULL) {
+      validate_shapefile_geometry(path)
       geo <- read_geo(path)
       geo_path(path)
       geo_data(geo)
+      geo_invalid_geometry(FALSE)
       columns <- names(sf::st_drop_geometry(geo))
       shiny::updateSelectInput(
         session,
@@ -228,6 +322,7 @@ analysis_server <- function(id) {
           "."
         )
       ))
+      if (!isTRUE(running())) toggle_run_button(FALSE)
     }
 
     shiny::observeEvent(input$raster_upload, {
@@ -283,9 +378,15 @@ analysis_server <- function(id) {
         path <- stage_uploaded_vector(upload, upload_dir)
         load_geospatial_file(path, paste(upload$name, collapse = ", "))
       }, error = function(e) {
-        geo_path(NULL)
-        geo_data(NULL)
-        validation_state(list(type = "danger", text = conditionMessage(e)))
+        if (identical(conditionMessage(e), invalid_geometry_message())) {
+          mark_invalid_geospatial_file()
+        } else {
+          geo_path(NULL)
+          geo_data(NULL)
+          geo_invalid_geometry(FALSE)
+          validation_state(list(type = "danger", text = conditionMessage(e)))
+          if (!isTRUE(running())) toggle_run_button(FALSE)
+        }
       })
     }, ignoreInit = TRUE)
 
@@ -414,7 +515,36 @@ analysis_server <- function(id) {
         Mining = input$class_mining,
         Urban = input$class_urban
       )
-      lapply(values, parse_number_vector, integer = TRUE)
+      parsed <- lapply(values, function(x) {
+        if (!nzchar(trimws(x %||% ""))) return(numeric())
+        parse_number_vector(x, integer = TRUE)
+      })
+
+      extra_ids <- extra_custom_class_ids()
+      if (length(extra_ids)) {
+        for (id in extra_ids) {
+          raw_name <- input[[paste0("extra_custom_class_name_", id)]] %||% ""
+          raw_values <- input[[paste0("extra_custom_class_values_", id)]] %||% ""
+          class_name <- normalize_custom_class_name(raw_name)
+          has_name <- nzchar(class_name)
+          has_values <- nzchar(trimws(raw_values))
+
+          if (!has_name && !has_values) {
+            next
+          }
+          if (!has_name) {
+            stop("Informe o nome da classe adicional.", call. = FALSE)
+          }
+          if (!has_values) {
+            stop("Informe os números relacionados à classe adicional '", class_name, "'.", call. = FALSE)
+          }
+
+          parsed[[class_name]] <- parse_number_vector(raw_values, integer = TRUE)
+        }
+      }
+
+      names(parsed) <- make.unique(names(parsed), sep = "_")
+      parsed[lengths(parsed) > 0L]
     })
 
     validate_rasters <- function() {
@@ -453,7 +583,26 @@ analysis_server <- function(id) {
       inspection
     }
 
+    resume_proxy_available <- function() {
+      output_folder <- path.expand(input$output_folder %||% "")
+      output_name <- sanitize_output_name(input$output_name %||% "LandScript_result")
+      if (!nzchar(output_folder) || !nzchar(output_name)) return(FALSE)
+      proxy_dir <- analysis_proxy_dir(output_folder, output_name)
+      file.exists(proxy_checkpoint_path(proxy_dir, "params"))
+    }
+
     validate_parameters <- function() {
+      if (isTRUE(geo_invalid_geometry())) {
+        validation_state(list(type = "danger", text = invalid_geometry_message()))
+        toggle_run_button(TRUE)
+        stop(invalid_geometry_message(), call. = FALSE)
+      }
+      resume_only <- resume_proxy_available() &&
+        (is.null(geo_path()) || is.null(geo_data()) || !nzchar(raster_folder_path()))
+      if (isTRUE(resume_only)) {
+        output_folder <- ensure_output_folder(input$output_folder)
+        return(list(rasters = NULL, output_folder = output_folder, resume_proxy = TRUE))
+      }
       shiny::req(geo_path(), geo_data())
       if (!isTRUE(input$no_mesh) &&
           (is.null(input$mesh_size_km) || !is.finite(input$mesh_size_km) || input$mesh_size_km <= 0)) {
@@ -465,7 +614,7 @@ analysis_server <- function(id) {
         stop("Selecione uma pasta de rasters válida para estimar a área do pixel.", call. = FALSE)
       }
       mapbiomas_class_map(input$mapbiomas, custom_classes())
-      list(rasters = rasters, output_folder = output_folder)
+      list(rasters = rasters, output_folder = output_folder, resume_proxy = FALSE)
     }
 
     output$raster_validation_message <- shiny::renderUI({
@@ -507,30 +656,25 @@ analysis_server <- function(id) {
       app_alert(message$text, color = message$type, dismissible = TRUE)
     })
 
-    toggle_run_button <- function(disabled) {
-      session$sendCustomMessage(
-        "toggle-disabled",
-        list(id = ns("run"), disabled = isTRUE(disabled))
-      )
-    }
-
     shiny::observeEvent(input$run, {
       if (running()) return()
       tryCatch({
-        validate_parameters()
+        validated <- validate_parameters()
+        resume_proxy <- isTRUE(validated$resume_proxy)
         params <- list(
-          geo_path = geo_path(),
+          geo_path = if (resume_proxy) NULL else geo_path(),
           group_column = input$group_column,
           no_mesh = isTRUE(input$no_mesh),
           mesh_size = if (isTRUE(input$no_mesh)) NULL else input$mesh_size_km * 1000,
           mesh_unit = "meters",
-          raster_folder = normalizePath(raster_folder_path(), mustWork = TRUE),
+          raster_folder = if (resume_proxy) NULL else normalizePath(raster_folder_path(), mustWork = TRUE),
           output_folder = path.expand(input$output_folder),
           output_name = sanitize_output_name(input$output_name),
           mapbiomas = input$mapbiomas,
           custom_classes = custom_classes(),
-          pixel_km2_ratio = pixel_area_value(),
-          max_cells = 1000000L
+          pixel_km2_ratio = if (resume_proxy) NA_real_ else pixel_area_value(),
+          max_cells = 1000000L,
+          resume_proxy = resume_proxy
         )
 
         progress_file <- file.path(session_dir, "progress.json")
@@ -720,7 +864,13 @@ analysis_server <- function(id) {
         paste0(result$output_name, "_resultados.zip")
       },
       content = function(file) {
-        prepare_result_download_zip(analysis_result(), file)
+        result <- analysis_result()
+        zip_path <- result$files[["result_zip"]] %||% NA_character_
+        if (!is.na(zip_path) && file.exists(zip_path)) {
+          file.copy(zip_path, file, overwrite = TRUE)
+        } else {
+          prepare_result_download_zip(result, file)
+        }
       }
     )
 

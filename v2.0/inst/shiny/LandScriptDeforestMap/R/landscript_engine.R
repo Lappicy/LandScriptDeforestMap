@@ -220,6 +220,136 @@ write_result_workbook <- function(path, layers, simplified = FALSE) {
   normalizePath(path, mustWork = TRUE)
 }
 
+analysis_proxy_dir <- function(output_folder, output_name) {
+  file.path(output_folder, paste0(output_name, "_proxy"))
+}
+
+proxy_checkpoint_path <- function(proxy_dir, name) {
+  file.path(proxy_dir, paste0(name, ".rds"))
+}
+
+write_checkpoint <- function(object, proxy_dir, name) {
+  dir.create(proxy_dir, recursive = TRUE, showWarnings = FALSE)
+  path <- proxy_checkpoint_path(proxy_dir, name)
+  tmp <- tempfile(paste0(name, "_"), tmpdir = proxy_dir, fileext = ".rds")
+  saveRDS(object, tmp)
+  if (file.exists(path)) unlink(path)
+  file.rename(tmp, path)
+  normalizePath(path, mustWork = TRUE)
+}
+
+read_checkpoint <- function(proxy_dir, name) {
+  path <- proxy_checkpoint_path(proxy_dir, name)
+  if (!file.exists(path)) return(NULL)
+  tryCatch(readRDS(path), error = function(e) NULL)
+}
+
+copy_files_to_proxy <- function(files, destination) {
+  files <- normalizePath(files[file.exists(files)], mustWork = TRUE)
+  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+  target_names <- basename(files)
+  if (anyDuplicated(target_names)) {
+    target_names <- make.unique(target_names, sep = "_")
+  }
+  targets <- file.path(destination, target_names)
+  ok <- file.copy(files, targets, overwrite = TRUE, copy.mode = FALSE)
+  if (!all(ok)) {
+    stop(
+      "Não foi possível copiar os arquivos para a pasta proxy: ",
+      paste(basename(files[!ok]), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  normalizePath(targets, mustWork = TRUE)
+}
+
+geo_bundle_files <- function(path) {
+  path <- normalizePath(path, mustWork = TRUE)
+  ext <- tolower(tools::file_ext(path))
+  if (!identical(ext, "shp")) return(path)
+  base <- tolower(tools::file_path_sans_ext(basename(path)))
+  siblings <- list.files(dirname(path), full.names = TRUE, recursive = FALSE)
+  siblings[
+    tolower(tools::file_path_sans_ext(basename(siblings))) == base &
+      tolower(tools::file_ext(siblings)) %in% shapefile_extensions()
+  ]
+}
+
+analysis_fingerprint <- function(params) {
+  geo_files <- geo_bundle_files(params$geo_path)
+  geo_info <- file.info(geo_files)
+  raster_index <- list_raster_files(params$raster_folder)
+  raster_info <- file.info(raster_index$path)
+  list(
+    geo = data.frame(
+      file = basename(geo_files),
+      size = unname(geo_info$size),
+      stringsAsFactors = FALSE
+    ),
+    rasters = data.frame(
+      file = raster_index$file,
+      year = raster_index$year,
+      size = unname(raster_info$size),
+      stringsAsFactors = FALSE
+    ),
+    group_column = params$group_column %||% "",
+    no_mesh = isTRUE(params$no_mesh),
+    mesh_size = params$mesh_size %||% NA_real_,
+    mesh_unit = params$mesh_unit %||% "degrees",
+    mapbiomas = params$mapbiomas %||% "",
+    custom_classes = params$custom_classes,
+    pixel_km2_ratio = params$pixel_km2_ratio,
+    max_cells = params$max_cells %||% NA_integer_
+  )
+}
+
+same_analysis_fingerprint <- function(x, y) {
+  isTRUE(identical(x, y))
+}
+
+clear_proxy_contents <- function(proxy_dir) {
+  if (!dir.exists(proxy_dir)) return(invisible(NULL))
+  contents <- list.files(proxy_dir, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+  safe_unlink(contents)
+  invisible(NULL)
+}
+
+prepare_proxy_inputs <- function(params, proxy_dir) {
+  input_dir <- file.path(proxy_dir, "inputs")
+  geo_dir <- file.path(input_dir, "geo")
+  raster_dir <- file.path(input_dir, "rasters")
+  safe_unlink(input_dir)
+  dir.create(geo_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(raster_dir, recursive = TRUE, showWarnings = FALSE)
+
+  geo_files <- copy_files_to_proxy(geo_bundle_files(params$geo_path), geo_dir)
+  geo_primary <- geo_files[
+    tolower(tools::file_ext(geo_files)) == tolower(tools::file_ext(params$geo_path)) &
+      basename(geo_files) == basename(params$geo_path)
+  ][1] %||% geo_files[[1]]
+
+  raster_index <- list_raster_files(params$raster_folder)
+  copy_files_to_proxy(raster_index$path, raster_dir)
+
+  params$geo_path <- normalizePath(geo_primary, mustWork = TRUE)
+  params$raster_folder <- normalizePath(raster_dir, mustWork = TRUE)
+  params
+}
+
+analysis_result_files_ready <- function(result) {
+  if (is.null(result) || is.null(result$files)) return(FALSE)
+  required <- c("complete_xlsx", "simplified_xlsx", "complete_gpkg", "simplified_gpkg")
+  files <- result$files[required]
+  all(!is.na(files) & file.exists(files))
+}
+
+ensure_result_zip <- function(result) {
+  zip_path <- file.path(result$output_folder, paste0(result$output_name, "_resultados.zip"))
+  prepare_result_download_zip(result, zip_path)
+  result$files["result_zip"] <- normalizePath(zip_path, mustWork = TRUE)
+  result
+}
+
 run_land_analysis <- function(params, progress_file = NULL) {
   progress <- function(percent, stage, detail = NULL, status = "running") {
     if (!is.null(progress_file)) {
@@ -228,35 +358,125 @@ run_land_analysis <- function(params, progress_file = NULL) {
   }
 
   progress(2, "Validação", "Conferindo arquivos e parâmetros")
-  raster_index <- list_raster_files(params$raster_folder)
   output_folder <- ensure_output_folder(params$output_folder)
   output_name <- sanitize_output_name(params$output_name)
+  params$output_folder <- output_folder
+  params$output_name <- output_name
+  proxy_dir <- analysis_proxy_dir(output_folder, output_name)
+  dir.create(proxy_dir, recursive = TRUE, showWarnings = FALSE)
 
-  progress(6, "Leitura", "Abrindo e validando o arquivo geoespacial")
-  geo <- read_geo(params$geo_path)
-  group_column <- params$group_column
-  if (is.null(group_column) || !nzchar(group_column) || identical(group_column, ".ALL")) {
-    group_column <- "BoundaryGroup"
+  prepared_params <- NULL
+  metadata <- read_checkpoint(proxy_dir, "metadata")
+  if (isTRUE(params$resume_proxy)) {
+    prepared_params <- read_checkpoint(proxy_dir, "params")
+    if (is.null(prepared_params)) {
+      stop("Não há parâmetros salvos na pasta proxy para retomar a análise.", call. = FALSE)
+    }
+    params <- prepared_params
+    output_folder <- params$output_folder
+    output_name <- params$output_name
+    progress(3, "Retomada", paste0("Usando pasta proxy: ", proxy_dir))
+  } else {
+    current_fingerprint <- analysis_fingerprint(params)
+    if (!is.null(metadata) && same_analysis_fingerprint(metadata$fingerprint, current_fingerprint)) {
+      prepared_params <- read_checkpoint(proxy_dir, "params")
+      if (!is.null(prepared_params)) {
+        params <- prepared_params
+        progress(3, "Retomada", paste0("Checkpoints encontrados em ", proxy_dir))
+      }
+    }
+    if (is.null(prepared_params)) {
+      if (!is.null(metadata)) clear_proxy_contents(proxy_dir)
+      dir.create(proxy_dir, recursive = TRUE, showWarnings = FALSE)
+      progress(3, "Proxy", paste0("Copiando entradas para ", proxy_dir))
+      params <- prepare_proxy_inputs(params, proxy_dir)
+      write_checkpoint(params, proxy_dir, "params")
+      write_checkpoint(
+        list(
+          fingerprint = current_fingerprint,
+          created_at = Sys.time(),
+          proxy_dir = proxy_dir
+        ),
+        proxy_dir,
+        "metadata"
+      )
+    }
   }
 
-  progress(10, "Limites", "Dissolvendo classes e removendo sobreposições")
-  boundaries <- prepare_group_boundaries(geo, params$group_column)
-  group_column <- attr(boundaries, "group_column")
-  overlap_removed <- isTRUE(attr(boundaries, "overlap_removed"))
+  final_checkpoint <- read_checkpoint(proxy_dir, "result")
+  if (analysis_result_files_ready(final_checkpoint)) {
+    progress(98, "Retomada", "Resultado final encontrado; conferindo ZIP.")
+    final_checkpoint <- ensure_result_zip(final_checkpoint)
+    write_checkpoint(final_checkpoint, proxy_dir, "result")
+    progress(100, "Concluído", "Resultado retomado da pasta proxy.", "complete")
+    return(final_checkpoint)
+  }
 
-  progress(14, "Malha", "Criando e recortando a malha quadrangular")
-  mesh <- create.mesh(
-    boundaries,
-    mesh.size = if (isTRUE(params$no_mesh)) NULL else params$mesh_size,
-    group.column = group_column,
-    max.cells = params$max_cells %||% 50000L,
-    mesh.unit = params$mesh_unit %||% "degrees"
-  )
-  mesh[[group_column]] <- factor(mesh[[group_column]])
+  raster_index <- list_raster_files(params$raster_folder)
+
+  progress(6, "Leitura", "Abrindo e validando o arquivo geoespacial")
+  mesh_checkpoint <- read_checkpoint(proxy_dir, "mesh")
+  if (!is.null(mesh_checkpoint)) {
+    progress(14, "Retomada", "Usando limites e malha salvos na pasta proxy.")
+    boundaries <- mesh_checkpoint$boundaries
+    group_column <- mesh_checkpoint$group_column
+    overlap_removed <- mesh_checkpoint$overlap_removed
+    mesh <- mesh_checkpoint$mesh
+  } else {
+    validate_shapefile_geometry(params$geo_path)
+    geo <- read_geo(params$geo_path)
+    group_column <- params$group_column
+    if (is.null(group_column) || !nzchar(group_column) || identical(group_column, ".ALL")) {
+      group_column <- "BoundaryGroup"
+    }
+
+    progress(10, "Limites", "Dissolvendo classes e removendo sobreposições")
+    boundaries <- prepare_group_boundaries(geo, params$group_column)
+    group_column <- attr(boundaries, "group_column")
+    overlap_removed <- isTRUE(attr(boundaries, "overlap_removed"))
+
+    progress(14, "Malha", "Criando e recortando a malha quadrangular")
+    mesh <- create.mesh(
+      boundaries,
+      mesh.size = if (isTRUE(params$no_mesh)) NULL else params$mesh_size,
+      group.column = group_column,
+      max.cells = params$max_cells %||% 50000L,
+      mesh.unit = params$mesh_unit %||% "degrees"
+    )
+    mesh[[group_column]] <- factor(mesh[[group_column]])
+    write_checkpoint(
+      list(
+        boundaries = boundaries,
+        group_column = group_column,
+        overlap_removed = overlap_removed,
+        mesh = mesh
+      ),
+      proxy_dir,
+      "mesh"
+    )
+  }
 
   all_counts <- vector("list", nrow(raster_index))
+  counts_dir <- file.path(proxy_dir, "raster_counts")
+  dir.create(counts_dir, recursive = TRUE, showWarnings = FALSE)
   for (i in seq_len(nrow(raster_index))) {
     pct <- 15 + 55 * (i - 1) / max(1, nrow(raster_index))
+    count_checkpoint <- file.path(
+      counts_dir,
+      sprintf("%03d_%s_%s.rds", i, raster_index$year[[i]], tools::file_path_sans_ext(raster_index$file[[i]]))
+    )
+    if (file.exists(count_checkpoint)) {
+      saved_count <- tryCatch(readRDS(count_checkpoint), error = function(e) NULL)
+      if (!is.null(saved_count)) {
+        all_counts[[i]] <- saved_count
+        progress(
+          pct,
+          paste0("Raster ", i, " de ", nrow(raster_index)),
+          paste0("Retomado do proxy: ", raster_index$year[[i]], " — ", raster_index$file[[i]])
+        )
+        next
+      }
+    }
     progress(
       pct,
       paste0("Raster ", i, " de ", nrow(raster_index)),
@@ -267,6 +487,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
       mesh,
       raster_index$year[[i]]
     )
+    saveRDS(all_counts[[i]], count_checkpoint)
   }
 
   progress(71, "Conversão", "Combinando anos e convertendo pixels para km²")
@@ -380,8 +601,11 @@ run_land_analysis <- function(params, progress_file = NULL) {
     )
   )
   saveRDS(result, result_rds)
+  result <- ensure_result_zip(result)
+  saveRDS(result, result_rds)
+  write_checkpoint(result, proxy_dir, "result")
 
-  progress(100, "Concluído", "Análise finalizada e arquivos exportados", "complete")
+  progress(100, "Concluído", "Análise finalizada, arquivos exportados e ZIP salvo.", "complete")
   result
 }
 
