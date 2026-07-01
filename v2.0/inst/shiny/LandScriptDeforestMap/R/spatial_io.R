@@ -175,6 +175,100 @@ meters_to_degree_equivalent <- function(meters, geo = NULL) {
   )
 }
 
+recommend_mesh_size_km <- function(
+  geo,
+  default_km = 5,
+  max_cells = 20000L,
+  step_km = 5,
+  group_column = NULL,
+  verify_actual = !is.null(group_column) && nzchar(group_column)
+) {
+  default_km <- suppressWarnings(as.numeric(default_km %||% 5))
+  if (!is.finite(default_km) || default_km <= 0) default_km <- 5
+  max_cells <- as.numeric(max_cells %||% 20000L)
+  if (!is.finite(max_cells) || max_cells <= 0) max_cells <- 20000L
+  step_km <- suppressWarnings(as.numeric(step_km %||% 5))
+  if (!is.finite(step_km) || step_km <= 0) step_km <- 5
+
+  geo <- read_geo(geo)
+  metric_geo <- sf::st_transform(geo, local_metric_crs(geo))
+  bbox <- sf::st_bbox(metric_geo)
+  width <- as.numeric(bbox[["xmax"]] - bbox[["xmin"]])
+  height <- as.numeric(bbox[["ymax"]] - bbox[["ymin"]])
+
+  if (!is.finite(width) || !is.finite(height) || width <= 0 || height <= 0) {
+    return(list(
+      size_km = default_km,
+      estimated_cells = NA_real_,
+      adjusted = FALSE,
+      max_cells = max_cells
+    ))
+  }
+
+  estimate_count <- function(size_km) {
+    size_m <- size_km * 1000
+    as.numeric(max(1, ceiling(width / size_m)) * max(1, ceiling(height / size_m)))
+  }
+
+  actual_count <- function(size_km) {
+    if (!isTRUE(verify_actual)) return(estimate_count(size_km))
+    tryCatch(
+      nrow(create.mesh(
+        geo,
+        mesh.size = size_km * 1000,
+        group.column = group_column,
+        max.cells = max_cells,
+        mesh.unit = "meters"
+      )),
+      error = function(e) Inf
+    )
+  }
+
+  verified_count <- function(size_km) {
+    estimated <- estimate_count(size_km)
+    if (!is.finite(estimated) || estimated > max_cells) return(Inf)
+    actual_count(size_km)
+  }
+
+  default_count <- estimate_count(default_km)
+  default_actual_count <- verified_count(default_km)
+  if (is.finite(default_count) && default_count <= max_cells &&
+      is.finite(default_actual_count) && default_actual_count <= max_cells) {
+    return(list(
+      size_km = default_km,
+      estimated_cells = default_actual_count,
+      adjusted = FALSE,
+      max_cells = max_cells,
+      previous_size_km = default_km,
+      previous_estimated_cells = default_actual_count
+    ))
+  }
+
+  approximate_km <- sqrt((width * height) / max_cells) / 1000
+  recommended_km <- ceiling(max(default_km, approximate_km) / step_km) * step_km
+  if (!is.finite(recommended_km) || recommended_km <= 0) recommended_km <- step_km
+
+  recommended_count <- verified_count(recommended_km)
+  guard <- 0L
+  while ((!is.finite(recommended_count) || recommended_count > max_cells) && guard < 10000L) {
+    recommended_km <- recommended_km + step_km
+    recommended_count <- verified_count(recommended_km)
+    guard <- guard + 1L
+  }
+  if (!is.finite(recommended_count)) {
+    recommended_count <- estimate_count(recommended_km)
+  }
+
+  list(
+    size_km = recommended_km,
+    estimated_cells = recommended_count,
+    adjusted = TRUE,
+    max_cells = max_cells,
+    previous_size_km = default_km,
+    previous_estimated_cells = default_actual_count
+  )
+}
+
 prepare_group_boundaries <- function(geo, group_column = NULL) {
   geo <- read_geo(geo)
   output_crs <- sf::st_crs(geo)
@@ -223,7 +317,7 @@ prepare_group_boundaries <- function(geo, group_column = NULL) {
     for (i in seq_len(nrow(boundaries))) {
       current <- repair_polygon_geometry(boundaries[i, , drop = FALSE])
       if (!is.null(assigned)) {
-        relation <- suppressWarnings(sf::st_relate(current, assigned, pattern = "T********"))
+        relation <- suppressMessages(suppressWarnings(sf::st_relate(current, assigned, pattern = "T********")))
         overlap_removed <- overlap_removed || any(lengths(relation) > 0L)
         current <- suppressMessages(suppressWarnings(sf::st_difference(current, assigned)))
         current <- repair_polygon_geometry(current)
@@ -336,6 +430,28 @@ mesh_for_leaflet <- function(mesh, max_features = 6000L) {
   mesh[seq_len(max_features), , drop = FALSE]
 }
 
+restore_numeric_result_column_names <- function(data) {
+  if (is.null(names(data))) return(data)
+
+  current_names <- names(data)
+  geometry_column <- if (inherits(data, "sf")) attr(data, "sf_column") %||% "" else ""
+  protected <- nzchar(geometry_column) & current_names == geometry_column
+
+  proposed_names <- current_names
+  raw_class_columns <- grepl("^X[0-9]+$", current_names)
+  proposed_names[raw_class_columns] <- sub("^X", "", proposed_names[raw_class_columns])
+
+  variation_columns <- grepl("^Variation_X[0-9]+$", current_names)
+  proposed_names[variation_columns] <- sub("^Variation_X", "Variation_", proposed_names[variation_columns])
+
+  proposed_names[protected] <- current_names[protected]
+  changed <- proposed_names != current_names & !proposed_names %in% current_names
+  current_names[changed] <- proposed_names[changed]
+
+  names(data) <- current_names
+  data
+}
+
 read_result_dataset <- function(path, layer = NULL) {
   extension <- tolower(tools::file_ext(path))
   if (extension == "gpkg") {
@@ -359,14 +475,14 @@ read_result_dataset <- function(path, layer = NULL) {
     if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
       stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
     }
-    return(drop_zm_geometry(data))
+    return(restore_numeric_result_column_names(drop_zm_geometry(data)))
   }
   if (extension %in% setdiff(supported_vector_extensions(), "gpkg")) {
     data <- sf::st_read(path, quiet = TRUE)
     if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
       stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
     }
-    return(drop_zm_geometry(data))
+    return(restore_numeric_result_column_names(drop_zm_geometry(data)))
   }
   if (extension == "xlsx") {
     if (!requireNamespace("readxl", quietly = TRUE)) {
@@ -378,26 +494,27 @@ read_result_dataset <- function(path, layer = NULL) {
     }
     selected <- layer %||% if ("Malha" %in% sheets) "Malha" else sheets[[1]]
     if (!selected %in% sheets) selected <- sheets[[1]]
-    return(as.data.frame(readxl::read_excel(path, sheet = selected, .name_repair = "minimal")))
+    return(restore_numeric_result_column_names(as.data.frame(readxl::read_excel(path, sheet = selected, .name_repair = "minimal"))))
   }
   if (extension %in% c("csv")) {
-    return(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE))
+    return(restore_numeric_result_column_names(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)))
   }
   if (extension %in% c("txt", "tsv")) {
-    return(utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE))
+    return(restore_numeric_result_column_names(utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)))
   }
   if (extension == "rds") {
     object <- readRDS(path)
     if (is.list(object) && all(c("mesh", "groups", "total") %in% names(object))) {
       selected <- layer %||% "mesh"
-      return(object[[selected]])
+      return(restore_numeric_result_column_names(object[[selected]]))
     }
-    return(object)
+    return(restore_numeric_result_column_names(object))
   }
   stop("Formato de resultado não suportado.", call. = FALSE)
 }
 
 result_table_data <- function(data) {
+  data <- restore_numeric_result_column_names(data)
   if (inherits(data, "sf")) {
     return(sf::st_drop_geometry(data))
   }

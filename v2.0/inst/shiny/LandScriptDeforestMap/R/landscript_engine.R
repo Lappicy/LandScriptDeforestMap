@@ -408,7 +408,9 @@ run_land_analysis <- function(params, progress_file = NULL) {
     progress(98, "Retomada", "Resultado final encontrado; conferindo ZIP.")
     final_checkpoint <- ensure_result_zip(final_checkpoint)
     write_checkpoint(final_checkpoint, proxy_dir, "result")
-    progress(100, "Concluído", "Resultado retomado da pasta proxy.", "complete")
+    progress(99, "Limpeza", "Removendo pasta proxy temporária.")
+    safe_unlink(proxy_dir)
+    progress(100, "Concluído", "Resultado retomado, ZIP salvo e pasta proxy removida.", "complete")
     return(final_checkpoint)
   }
 
@@ -544,7 +546,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
     group_column = group_column
   )
 
-  progress(94, "Exportação", "Gravando tabelas e GeoPackages")
+  progress(94, "Exportação", "Salvando tabelas e GeoPackages")
   layers <- list(mesh = unit_results, groups = group_results, total = total_results)
   complete_table <- dplyr::bind_rows(lapply(layers, sf::st_drop_geometry))
   simplified_table <- dplyr::bind_rows(lapply(layers, function(x) {
@@ -605,6 +607,8 @@ run_land_analysis <- function(params, progress_file = NULL) {
   saveRDS(result, result_rds)
   write_checkpoint(result, proxy_dir, "result")
 
+  progress(99, "Limpeza", "Removendo pasta proxy temporária.")
+  safe_unlink(proxy_dir)
   progress(100, "Concluído", "Análise finalizada, arquivos exportados e ZIP salvo.", "complete")
   result
 }

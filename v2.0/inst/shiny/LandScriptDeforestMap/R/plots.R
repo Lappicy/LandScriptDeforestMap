@@ -255,13 +255,39 @@ mesh.map <- function(
   values[is.na(values) | values < 0] <- 0
   data$.MapValue <- values
 
+  data_table <- sf::st_drop_geometry(data)
+
   if (length(grouping)) {
-    map_data <- data |>
+    map_values <- data_table |>
       dplyr::group_by(dplyr::across(dplyr::all_of(grouping))) |>
       dplyr::summarise(.MapValue = sum(.data$.MapValue, na.rm = TRUE), .groups = "drop")
+
+    geometry_data <- data |>
+      dplyr::group_by(dplyr::across(dplyr::all_of(grouping))) |>
+      dplyr::slice(1L) |>
+      dplyr::ungroup()
+    geometry_lookup <- sf::st_drop_geometry(geometry_data[, grouping, drop = FALSE])
+    geometry_lookup$.geometry_index <- seq_len(nrow(geometry_data))
+
+    map_data <- dplyr::left_join(map_values, geometry_lookup, by = grouping)
+    if (anyNA(map_data$.geometry_index)) {
+      stop("Não foi possível associar as geometrias aos dados do mapa.", call. = FALSE)
+    }
+    map_geometry <- sf::st_geometry(geometry_data)[map_data$.geometry_index]
+    map_data$.geometry_index <- NULL
+    map_data <- sf::st_sf(
+      map_data,
+      geometry = sf::st_sfc(map_geometry, crs = sf::st_crs(data))
+    )
   } else {
-    map_data <- data |>
-      dplyr::summarise(.MapValue = sum(.data$.MapValue, na.rm = TRUE))
+    map_geometry <- suppressMessages(suppressWarnings(sf::st_union(sf::st_geometry(data))))
+    map_data <- sf::st_sf(
+      .MapValue = sum(data_table$.MapValue, na.rm = TRUE),
+      geometry = sf::st_sfc(map_geometry, crs = sf::st_crs(data))
+    )
+  }
+  if (exists("repair_polygon_geometry", mode = "function")) {
+    map_data <- repair_polygon_geometry(map_data)
   }
 
   col.limits <- sort(unique(as.numeric(col.limits)))

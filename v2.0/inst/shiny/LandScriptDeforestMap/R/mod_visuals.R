@@ -47,7 +47,7 @@ visuals_ui <- function(id) {
             width = 360,
             shiny::selectInput(ns("primary_column"), "Variável principal", choices = NULL, selected = "Deforestation"),
             shiny::selectizeInput(ns("comparison_columns"), "Variáveis comparadas", choices = NULL, multiple = TRUE),
-            shiny::selectInput(ns("chart_group"), "Agrupar/facetar por", choices = c("Sem agrupamento" = "")),
+            shiny::selectInput(ns("chart_group"), "Agrupar por:", choices = c("Sem agrupamento" = "__none__")),
             shiny::textInput(ns("chart_colors"), "Cores das comparações", "purple, grey50, #EA9999, darkorange"),
             shiny::textInput(ns("primary_color"), "Cor da variável principal", "darkgreen"),
             shiny::textInput(ns("chart_title"), "Título", "Desmatamento e variação das classes"),
@@ -343,7 +343,14 @@ visuals_server <- function(id, automatic_result) {
         !vapply(data, is.numeric, logical(1))
       ]
       non_numeric <- setdiff(non_numeric, c("AnalysisLevel"))
-      shiny::updateSelectInput(session, "chart_group", choices = c("Sem agrupamento" = "", stats::setNames(non_numeric, non_numeric)))
+      current_chart_group <- input$chart_group %||% "__none__"
+      chart_group_choices <- c("Sem agrupamento" = "__none__", stats::setNames(non_numeric, non_numeric))
+      shiny::updateSelectInput(
+        session,
+        "chart_group",
+        choices = chart_group_choices,
+        selected = if (current_chart_group %in% unname(chart_group_choices)) current_chart_group else "__none__"
+      )
 
       spatial_data <- tryCatch(current_data(), error = function(e) NULL)
       if (inherits(spatial_data, "sf")) {
@@ -371,6 +378,8 @@ visuals_server <- function(id, automatic_result) {
 
     chart_object <- shiny::reactive({
       data <- current_table()
+      chart_group <- input$chart_group %||% "__none__"
+      if (identical(chart_group, "__none__")) chart_group <- NULL
       build_timeseries_plot(
         data,
         comparison.columns = input$comparison_columns,
@@ -378,7 +387,7 @@ visuals_server <- function(id, automatic_result) {
         comparison.colors = parse_color_vector(input$chart_colors),
         primary.color = parse_color_vector(input$primary_color)[[1]],
         title.name = chart_title_value(),
-        different.group = input$chart_group,
+        different.group = chart_group,
         language = plot_language()
       )
     })

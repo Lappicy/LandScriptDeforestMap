@@ -472,14 +472,24 @@ stage_uploaded_vector <- function(upload, destination) {
   stage_vector_files(copied, destination, source = "upload")
 }
 
-stage_raster_upload <- function(upload, destination) {
+stage_raster_upload <- function(upload, destination, progress = NULL) {
   if (is.null(upload) || !nrow(upload)) {
     stop("Selecione ou arraste os rasters classificados.", call. = FALSE)
   }
 
   dir.create(destination, recursive = TRUE, showWarnings = FALSE)
   copied <- file.path(destination, basename(upload$name))
-  ok <- file.copy(upload$datapath, copied, overwrite = TRUE)
+  total <- nrow(upload)
+  ok <- logical(total)
+  for (i in seq_len(total)) {
+    report_progress(
+      progress,
+      2 + ((i - 1) / total) * 10,
+      paste0("Copiando arquivo ", i, " de ", total),
+      basename(upload$name[[i]])
+    )
+    ok[[i]] <- file.copy(upload$datapath[[i]], copied[[i]], overwrite = TRUE)
+  }
   if (!all(ok)) {
     stop("Não foi possível preparar todos os rasters enviados.", call. = FALSE)
   }
@@ -487,6 +497,12 @@ stage_raster_upload <- function(upload, destination) {
   zip_files <- copied[tolower(tools::file_ext(copied)) == "zip"]
   if (length(zip_files)) {
     for (i in seq_along(zip_files)) {
+      report_progress(
+        progress,
+        12 + ((i - 1) / length(zip_files)) * 8,
+        paste0("Extraindo ZIP ", i, " de ", length(zip_files)),
+        basename(zip_files[[i]])
+      )
       safe_extract_zip(
         zip_files[[i]],
         file.path(destination, paste0("zip_extracted_", i)),
@@ -496,6 +512,7 @@ stage_raster_upload <- function(upload, destination) {
     }
   }
 
+  report_progress(progress, 20, "Arquivos preparados", "Iniciando validação dos rasters.")
   normalizePath(destination, mustWork = TRUE)
 }
 
@@ -560,7 +577,7 @@ safe_extract_zip <- function(
   destination_root <- paste0(normalizePath(destination, mustWork = TRUE), .Platform$file.sep)
   normalized <- normalizePath(extracted, mustWork = TRUE)
   if (any(!startsWith(normalized, destination_root))) {
-    stop("O ZIP tentou gravar arquivos fora da pasta temporária.", call. = FALSE)
+    stop("O ZIP tentou salvar arquivos fora da pasta temporária.", call. = FALSE)
   }
   if (any(nzchar(Sys.readlink(normalized)))) {
     stop("O ZIP contém links simbólicos, que não são permitidos.", call. = FALSE)

@@ -176,6 +176,10 @@ analysis_server <- function(id) {
     raster_folder_path <- shiny::reactiveVal("")
     raster_folder_label <- shiny::reactiveVal("")
     raster_validation_token <- shiny::reactiveVal(0L)
+    raster_validation_process <- shiny::reactiveVal(NULL)
+    raster_validation_progress_file <- shiny::reactiveVal(NULL)
+    raster_validation_result_file <- shiny::reactiveVal(NULL)
+    raster_validation_job_token <- shiny::reactiveVal(NULL)
     running <- shiny::reactiveVal(FALSE)
     job_process <- shiny::reactiveVal(NULL)
     job_progress_file <- shiny::reactiveVal(NULL)
@@ -268,37 +272,102 @@ analysis_server <- function(id) {
       }))
     })
 
-    schedule_uploaded_raster_validation <- function(upload, token) {
-      run_upload_validation <- function() {
-        if (!identical(token, shiny::isolate(raster_validation_token()))) {
-          return(invisible(NULL))
-        }
-        tryCatch({
-          set_raster_validation_progress(
-            2,
-            "Carregando arquivos",
-            "Copiando arquivos enviados para a sessão."
-          )
-          upload_dir <- file.path(session_dir, paste0("rasters_", token, "_", as.integer(Sys.time())))
-          staged_folder <- stage_raster_upload(upload, upload_dir)
-          if (!identical(token, shiny::isolate(raster_validation_token()))) {
-            return(invisible(NULL))
-          }
-          raster_folder_path(staged_folder)
-          raster_folder_label(paste0("Upload: ", nrow(upload), " arquivo(s) enviado(s)"))
-          validate_rasters()
-        }, error = function(e) {
-          if (identical(token, shiny::isolate(raster_validation_token()))) {
-            raster_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
-          }
-        })
+    stop_raster_validation_process <- function() {
+      process <- shiny::isolate(raster_validation_process())
+      if (!is.null(process) && process$is_alive()) {
+        try(process$kill(), silent = TRUE)
       }
-
-      session$onFlushed(function() {
-        later::later(run_upload_validation, delay = 0.15)
-      }, once = TRUE)
-
+      raster_validation_process(NULL)
+      raster_validation_progress_file(NULL)
+      raster_validation_result_file(NULL)
+      raster_validation_job_token(NULL)
       invisible(NULL)
+    }
+
+    apply_raster_inspection <- function(inspection) {
+      pixel_area_value(inspection$pixel_area_km2)
+      pixel_area_summary(paste0(
+        format(inspection$pixel_area_km2, scientific = FALSE, digits = 8, decimal.mark = ","),
+        " km²",
+        if (isTRUE(inspection$pixel_area_standardized)) {
+          paste0(" (", inspection$pixel_area_standard_label, ")")
+        } else {
+          ""
+        }
+      ))
+      consistency <- c(
+        if (inspection$same_crs) "CRS consistente" else "CRS diferentes",
+        if (inspection$same_resolution) "resolução consistente" else "resoluções diferentes"
+      )
+      raster_validation_state(list(
+        status = if (inspection$same_crs && inspection$same_resolution) "complete" else "warning",
+        percent = 100,
+        type = if (inspection$same_crs && inspection$same_resolution) "success" else "warning",
+        text = paste0(
+          "Validação concluída: ", inspection$count, " raster(s), anos ",
+          inspection$years[[1]], "–", inspection$years[[2]], "; ",
+          paste(consistency, collapse = "; "), ". Resolução: ",
+          paste(format(inspection$resolution, digits = 7), collapse = " × "), "."
+        )
+      ))
+      invisible(inspection)
+    }
+
+    schedule_uploaded_raster_validation <- function(upload, token) {
+      stop_raster_validation_process()
+
+      upload_dir <- file.path(session_dir, paste0("rasters_", token, "_", as.integer(Sys.time())))
+      progress_file <- file.path(session_dir, paste0("raster_validation_", token, ".json"))
+      result_file <- file.path(session_dir, paste0("raster_validation_", token, ".rds"))
+      safe_unlink(c(progress_file, result_file))
+      write_progress(progress_file, 1, "Carregando arquivos", "Preparando validação em segundo plano.", "running")
+
+      process <- callr::r_bg(
+        func = function(upload, upload_dir, progress_file, result_file, app_directory) {
+          source(file.path(app_directory, "R", "utils.R"), local = globalenv())
+
+          progress <- function(percent, stage, detail = NULL, status = "running") {
+            write_progress(progress_file, percent, stage, detail, status)
+          }
+          scaled_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
+            progress(20 + (max(0, min(100, as.numeric(percent))) / 100) * 78, stage, detail, status)
+          }
+
+          tryCatch({
+            progress(1, "Carregando arquivos", "Copiando arquivos enviados para a sessão.")
+            staged_folder <- stage_raster_upload(upload, upload_dir, progress = progress)
+            inspection <- inspect_raster_folder(staged_folder, progress = scaled_validation_progress)
+            saveRDS(
+              list(
+                staged_folder = normalizePath(staged_folder, mustWork = TRUE),
+                label = paste0("Upload: ", nrow(upload), " arquivo(s) enviado(s)"),
+                inspection = inspection
+              ),
+              result_file
+            )
+            progress(100, "Validação concluída", "Rasters carregados e validados.", "complete")
+          }, error = function(e) {
+            write_progress(progress_file, 100, "Erro", conditionMessage(e), "error")
+            stop(e)
+          })
+        },
+        args = list(
+          upload = upload,
+          upload_dir = upload_dir,
+          progress_file = progress_file,
+          result_file = result_file,
+          app_directory = app_root()
+        ),
+        supervise = TRUE,
+        stdout = "|",
+        stderr = "|"
+      )
+
+      raster_validation_process(process)
+      raster_validation_progress_file(progress_file)
+      raster_validation_result_file(result_file)
+      raster_validation_job_token(token)
+      invisible(process)
     }
 
     load_geospatial_file <- function(path, source_label = NULL) {
@@ -308,18 +377,50 @@ analysis_server <- function(id) {
       geo_data(geo)
       geo_invalid_geometry(FALSE)
       columns <- names(sf::st_drop_geometry(geo))
+      selected_group_column <- if (length(columns)) columns[[1]] else ".ALL"
+      mesh_recommendation <- recommend_mesh_size_km(
+        geo,
+        default_km = 5,
+        max_cells = 20000L,
+        step_km = 5,
+        group_column = selected_group_column
+      )
+      shiny::updateNumericInput(
+        session,
+        "mesh_size_km",
+        value = mesh_recommendation$size_km
+      )
+      shiny::updateSliderInput(
+        session,
+        "mesh_size_slider_km",
+        min = 0.1,
+        max = max(100, mesh_recommendation$size_km),
+        value = mesh_recommendation$size_km
+      )
       shiny::updateSelectInput(
         session,
         "group_column",
         choices = c("Toda a área (sem grupos)" = ".ALL", stats::setNames(columns, columns)),
-        selected = if (length(columns)) columns[[1]] else ".ALL"
+        selected = selected_group_column
       )
+      mesh_message <- if (isTRUE(mesh_recommendation$adjusted)) {
+        paste0(
+          " A malha inicial foi ajustada automaticamente para ",
+          format(mesh_recommendation$size_km, big.mark = ".", decimal.mark = ","),
+          " km, evitando estimar mais de ",
+          format(mesh_recommendation$max_cells, big.mark = ".", decimal.mark = ","),
+          " quadrículas."
+        )
+      } else {
+        ""
+      }
       validation_state(list(
         type = "success",
         text = paste0(
           "Arquivo geoespacial carregado com sucesso",
           if (!is.null(source_label) && nzchar(source_label)) paste0(": ", source_label) else "",
-          "."
+          ".",
+          mesh_message
         )
       ))
       if (!isTRUE(running())) toggle_run_button(FALSE)
@@ -335,6 +436,7 @@ analysis_server <- function(id) {
       validation_state(NULL)
       pixel_area_value(NULL)
       pixel_area_summary("—")
+      toggle_run_button(TRUE)
       set_raster_validation_progress(
         1,
         "Carregando arquivos",
@@ -345,6 +447,7 @@ analysis_server <- function(id) {
 
     shiny::observeEvent(input$clear_raster_folder, {
       raster_validation_token(raster_validation_token() + 1L)
+      stop_raster_validation_process()
       raster_folder_path("")
       raster_folder_label("")
       validation_state(NULL)
@@ -554,34 +657,57 @@ analysis_server <- function(id) {
         folder,
         progress = set_raster_validation_progress
       )
-      pixel_area_value(inspection$pixel_area_km2)
-      pixel_area_summary(paste0(
-        format(inspection$pixel_area_km2, scientific = FALSE, digits = 8, decimal.mark = ","),
-        " km²",
-        if (isTRUE(inspection$pixel_area_standardized)) {
-          paste0(" (", inspection$pixel_area_standard_label, ")")
-        } else {
-          ""
-        }
-      ))
-      consistency <- c(
-        if (inspection$same_crs) "CRS consistente" else "CRS diferentes",
-        if (inspection$same_resolution) "resolução consistente" else "resoluções diferentes"
-      )
-      raster_validation_state(list(
-        status = if (inspection$same_crs && inspection$same_resolution) "complete" else "warning",
-        percent = 100,
-        type = if (inspection$same_crs && inspection$same_resolution) "success" else "warning",
-        text = paste0(
-          "Validação concluída: ", inspection$count, " raster(s), anos ",
-          inspection$years[[1]], "–", inspection$years[[2]], "; ",
-          paste(consistency, collapse = "; "), ". Resolução: ",
-          paste(format(inspection$resolution, digits = 7), collapse = " × "), "."
-        )
-      ))
+      apply_raster_inspection(inspection)
       try(get("flushReact", asNamespace("shiny"))(), silent = TRUE)
       inspection
     }
+
+    shiny::observe({
+      process <- raster_validation_process()
+      if (is.null(process)) return()
+      shiny::invalidateLater(350, session)
+
+      token <- raster_validation_job_token()
+      if (!identical(token, shiny::isolate(raster_validation_token()))) return()
+
+      progress_file <- raster_validation_progress_file()
+      result_file <- raster_validation_result_file()
+      if (!is.null(progress_file) && file.exists(progress_file)) {
+        progress <- read_progress(progress_file)
+        raster_validation_state(list(
+          status = progress$status %||% "running",
+          percent = progress$percent %||% 0,
+          stage = progress$stage %||% "Validando rasters",
+          detail = progress$detail %||% ""
+        ))
+      }
+
+      if (!process$is_alive()) {
+        exit_status <- process$get_exit_status()
+        raster_validation_process(NULL)
+        raster_validation_progress_file(NULL)
+        raster_validation_result_file(NULL)
+        raster_validation_job_token(NULL)
+
+        if (identical(exit_status, 0L) && !is.null(result_file) && file.exists(result_file)) {
+          result <- readRDS(result_file)
+          raster_folder_path(result$staged_folder)
+          raster_folder_label(result$label)
+          apply_raster_inspection(result$inspection)
+          if (!isTRUE(running()) && !isTRUE(geo_invalid_geometry())) toggle_run_button(FALSE)
+        } else {
+          error_lines <- c(process$read_error_lines(), process$read_output_lines())
+          progress <- if (!is.null(progress_file)) read_progress(progress_file) else list()
+          detail <- progress$detail %||% utils::tail(error_lines[nzchar(error_lines)], 1L) %||% "Falha desconhecida ao validar os rasters."
+          raster_folder_path("")
+          raster_folder_label("")
+          pixel_area_value(NULL)
+          pixel_area_summary("—")
+          raster_validation_state(list(status = "error", type = "danger", text = detail))
+          if (!isTRUE(running()) && !isTRUE(geo_invalid_geometry())) toggle_run_button(FALSE)
+        }
+      }
+    })
 
     resume_proxy_available <- function() {
       output_folder <- path.expand(input$output_folder %||% "")
@@ -596,6 +722,10 @@ analysis_server <- function(id) {
         validation_state(list(type = "danger", text = invalid_geometry_message()))
         toggle_run_button(TRUE)
         stop(invalid_geometry_message(), call. = FALSE)
+      }
+      raster_process <- raster_validation_process()
+      if (!is.null(raster_process) && raster_process$is_alive()) {
+        stop("Aguarde a validação dos rasters terminar antes de rodar o algoritmo.", call. = FALSE)
       }
       resume_only <- resume_proxy_available() &&
         (is.null(geo_path()) || is.null(geo_data()) || !nzchar(raster_folder_path()))
@@ -620,9 +750,11 @@ analysis_server <- function(id) {
     output$raster_validation_message <- shiny::renderUI({
       message <- raster_validation_state()
       if (is.null(message)) return(NULL)
-      if (!is.null(message$percent) && !identical(message$status, "complete") &&
-          !identical(message$status, "warning") && is.null(message$text)) {
+      if (!is.null(message$percent) && is.null(message$text)) {
         percent <- max(0, min(100, as.numeric(message$percent %||% 0)))
+        color <- if (identical(message$status, "error")) "danger" else {
+          if (identical(message$status, "complete")) "success" else "primary"
+        }
         return(shiny::div(
           class = "raster-validation-result",
           shiny::div(
@@ -637,7 +769,7 @@ analysis_server <- function(id) {
             `aria-valuemin` = 0,
             `aria-valuemax` = 100,
             shiny::div(
-              class = "progress-bar progress-bar-striped progress-bar-animated bg-primary",
+              class = paste("progress-bar progress-bar-striped progress-bar-animated", paste0("bg-", color)),
               style = paste0("width:", percent, "%"),
               paste0(round(percent), "%")
             )
@@ -875,6 +1007,8 @@ analysis_server <- function(id) {
     )
 
     session$onSessionEnded(function() {
+      raster_process <- shiny::isolate(raster_validation_process())
+      if (!is.null(raster_process) && raster_process$is_alive()) raster_process$kill()
       process <- shiny::isolate(job_process())
       if (!is.null(process) && process$is_alive()) process$kill()
       safe_unlink(session_dir)
