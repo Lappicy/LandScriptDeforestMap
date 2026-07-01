@@ -6,7 +6,7 @@ pixel.to.km2(proxy.table, pixel.km2.ratio = 30*30/1000000)
 }
 \arguments{
   \item{proxy.table}{The data.frame file with the pixel columns with numeric names.}
-  \item{pixel.km2.ration}{The ratio used for the transformation. The default is for the Landsite satellites which have a 30m resolution.}
+  \item{pixel.km2.ratio}{The ratio used for the transformation. The default is for Landsat images with 30 m resolution.}
 }
 \value{
 This function returns the same \code{proxy.table} given but with the pixel columns (numeric) passed through the ration defined at \code{pixel.km2.ratio}.

@@ -2,13 +2,15 @@
 \alias{calc.raster}
 \title{Calculates how many pixels have the same number for each row in a file.}
 \usage{
-calc.raster(geo.file, tif.file, year.used = NULL, folder.output = "Proxy/")
+calc.raster(geo.file, tif.file, year.used = NULL, folder.output = "Proxy/",
+            overwrite = TRUE)
 }
 \arguments{
   \item{geo.file}{Vector file in sf, .gpkg, or .shp format (also known as GIS or geospatial data).}
   \item{tif.file}{Image file in a raster format.}
   \item{year.used}{Which specific year the \code{tif.file} given is for. If not known, the default is NULL.}
   \item{folder.output}{Folder on which R will save the files for each \code{ID_mesh} and \code{year}. The default is a temporary folder called "\code{Proxy/}", which is later deleted.}
+  \item{overwrite}{Whether existing intermediate files may be overwritten.}
 }
 \value{
 This function returns a sf object that resembles the \code{geo.file} object but with extra columns. These columns are numerical, and have numerical names. They contain the ammount of pixels for such class (column name = class) for the geometry present in that row.

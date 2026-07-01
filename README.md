@@ -1,14 +1,13 @@
-# LandScriptDeforestMap
+# LandScriptDeforestMap 2.0.0
 
-Pacote R para avaliar desmatamento e mudanças de classes em imagens classificadas de sensoriamento remoto.
+Esta versão reúne:
 
-Este repositório mantém duas versões instaláveis e independentes:
-
-- `v1.0/`: versão original publicada do pacote;
-- `v2.0/`: funções atualizadas e aplicação web R Shiny.
-
-Cada pasta contém um pacote R completo. Por isso, a versão desejada deve ser
-informada no argumento `subdir`.
+- funções científicas atualizadas;
+- suporte às versões 4, 7.1, 8 e 10 do MapBiomas;
+- gráficos e mapas atualizados;
+- gráficos e mapas com alternância entre português do Brasil e inglês;
+- aplicação R Shiny completa;
+- dados de exemplo.
 
 ## Instalação passo a passo
 
@@ -19,18 +18,18 @@ Baixe e instale o R pelo site oficial do CRAN:
 - Windows: <https://cran.r-project.org/bin/windows/base/>
 - macOS: <https://cran.r-project.org/bin/macosx/>
 
-Recomenda-se usar uma versão recente do R. A versão `v2.0` do pacote necessita de uma versão mais atual que a 
-`4.3.0`.
+Esta versão do `LandScriptDeforestMap` requer `R >= 4.3.0`.
 
 ### 2. Windows: instalar o Rtools
 
-No Windows, instale também o Rtools, porque alguns pacotes podem precisar ser compilados durante a instalação.
+Se você estiver no Windows, instale também o Rtools. Ele é usado quando algum
+pacote precisa ser compilado durante a instalação.
 
 Baixe pelo site oficial:
 
 <https://cran.r-project.org/bin/windows/Rtools/>
 
-Escolha o Rtools compatível com a sua versão do R. Por exemplo:
+Escolha a versão do Rtools compatível com a sua versão do R. Exemplos:
 
 - R 4.5.x ou superior indicado pela página do CRAN: Rtools 4.5;
 - R 4.4.x: Rtools 4.4;
@@ -40,68 +39,64 @@ Depois de instalar, reinicie o R/RStudio.
 
 ### 3. macOS
 
-No macOS, não existe Rtools e, portanto, não necessita de nenhum download a mais.
+No macOS, não se instala Rtools. Normalmente basta instalar o R pelo CRAN e usar
+os pacotes binários.
+
+Se algum pacote precisar ser compilado a partir do código-fonte, pode ser
+necessário instalar ferramentas de desenvolvimento, como Xcode e compilador
+Fortran:
+
+<https://cran.r-project.org/bin/macosx/tools/>
 
 ### 4. Instalar o pacote `remotes`
 
-Abra o R ou RStudio e execute:
+No R/RStudio, execute:
 
 ```r
 install.packages("remotes", repos = "https://cloud.r-project.org")
 ```
 
-### 5. Instalar a versão 2.0 (mais atual)
+### 5. Instalar o LandScriptDeforestMap 2.0 pelo GitHub
 
 ```r
 remotes::install_github(
   "Lappicy/LandScriptDeforestMap",
-  subdir = "v2.0"
+  subdir = "v2.0",
+  upgrade = "never"
 )
 
 library(LandScriptDeforestMap)
 ```
 
-Para iniciar a plataforma Shiny incluída na versão 2.0:
+## Aplicação Shiny
 
 ```r
 LandScriptDeforestMap::runLandScriptApp()
 ```
 
-Para instalar versões anteriores, basta substituir o subdiretório para a versão desejada (como "v1.0" por exemplo)
+A aplicação é copiada para uma pasta temporária antes da execução. Isso evita
+que resultados sejam gravados dentro da pasta de instalação do pacote.
+
+Os resultados podem ser baixados em um único arquivo ZIP. Esse ZIP pode ser
+carregado novamente na aba **Gráficos e mapas**, que seleciona automaticamente
+o GeoPackage completo e a camada `mesh`.
+
+## Uso pelas funções
+
+As funções atualizadas podem ser chamadas normalmente depois de carregar o
+pacote:
 
 ```r
-remotes::install_github(
-  "Lappicy/LandScriptDeforestMap",
-  subdir = "v1.0"
+example.files()
+
+malha <- create.mesh(
+  geo.file = CavernaMaroaga,
+  mesh.size = 0.045
 )
-
-library(LandScriptDeforestMap)
 ```
 
-## Importante sobre as versões
-
-As duas versões usam o mesmo nome de pacote: `LandScriptDeforestMap`. Portanto,
-instalar uma delas na mesma biblioteca do R substitui a versão anteriormente
-instalada.
-
-Para conferir a versão ativa:
+Os scripts originais recebidos para a versão 2.0 também são preservados em:
 
 ```r
-packageVersion("LandScriptDeforestMap")
+system.file("original-v2-scripts", package = "LandScriptDeforestMap")
 ```
-
-## Citação
-
-Lappicy, T.; Cabral, A. I. R.; Da Silva, R. G. P.; Arguelho, J. S.;
-de Andrade, S. P. B.; Pereira, A. K.; Laques, A.-E.; Saito, C. H. (2024).
-*LandScriptDeforestMap: An R package to evaluate deforestation in remote
-sensing images*. SoftwareX, 27, 101799.
-https://doi.org/10.1016/j.softx.2024.101799
-
-O software possui Certificado de Registro de Programa de Computador no INPI,
-processo `BR512024004176-1`.
-
-## Licença
-
-MIT. O uso é aberto; ao utilizar o pacote, os resultados ou a plataforma,
-lembre-se de citar o trabalho.

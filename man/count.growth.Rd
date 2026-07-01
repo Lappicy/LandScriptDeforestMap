@@ -2,7 +2,7 @@
 \alias{count.growth}
 \title{Count yearly growth for the different classes.}
 \usage{
-count.grouwth(proxy.table, output.folder, output.name, column.used = NULL)
+count.growth(proxy.table, output.folder, output.name, column.used = NULL)
 }
 \arguments{
   \item{proxy.table}{Table (or sf object) with the correct format (having named columns for 8 classes - see \code{count.classes} function).}

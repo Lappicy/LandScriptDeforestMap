@@ -6,7 +6,7 @@ count.classes(proxy.table, MAPBIOMAS = NULL, PRODES = NULL,
               num.forest = NULL, num.non.forest = NULL,
               num.urban = NULL, num.mining = NULL,
               num.pasture = NULL, num.agriculture = NULL,
-              num.water = NULL, num.others = NULL)
+              num.water = NULL, num.fire = NULL, num.others = NULL)
 }
 \arguments{
   \item{proxy.table}{Table with the correct format (having columns names as the legend key from MapBiomas or PRODES data).}
@@ -19,6 +19,7 @@ count.classes(proxy.table, MAPBIOMAS = NULL, PRODES = NULL,
   \item{num.pasture}{Which numbers represent "pasture".}
   \item{num.agriculture}{Which numbers represent "agriculture".}
   \item{num.water}{Which numbers represent "water".}
+  \item{num.fire}{Which numbers represent "fire".}
   \item{num.others}{Which numbers represent "others".}
 }
 \value{

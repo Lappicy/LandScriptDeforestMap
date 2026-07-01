@@ -1,0 +1,498 @@
+:root {
+  --ls-ink: #17212b;
+  --ls-muted: #65736f;
+  --ls-surface: #f4f7f6;
+  --ls-accent: #176b5b;
+  --ls-gold: #d7a93d;
+}
+
+body {
+  color: var(--ls-ink);
+  background:
+    radial-gradient(circle at top right, rgba(23, 107, 91, 0.08), transparent 34rem),
+    var(--ls-surface);
+}
+
+.navbar {
+  box-shadow: 0 2px 18px rgba(25, 48, 43, 0.12);
+}
+
+.navbar .navbar-nav {
+  margin-left: auto !important;
+  justify-content: flex-end;
+}
+
+.navbar .navbar-brand {
+  margin-right: clamp(2rem, 8vw, 8rem);
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  line-height: 1;
+}
+
+.brand-lockup .brand-mark {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff2bd;
+}
+
+.brand-lockup strong {
+  display: block;
+}
+
+.bslib-sidebar-layout > .sidebar {
+  border-right: 1px solid rgba(23, 107, 91, 0.12);
+}
+
+.accordion-button {
+  font-weight: 700;
+}
+
+.card {
+  border: 1px solid rgba(23, 107, 91, 0.1);
+  box-shadow: 0 10px 30px rgba(26, 50, 44, 0.06);
+}
+
+.card-header {
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.leaflet-container {
+  border-radius: 0.4rem;
+  background: #d9e3e0;
+}
+
+.geo-upload-dropzone,
+.raster-upload-dropzone {
+  margin-bottom: 0.35rem;
+}
+
+.geo-upload-dropzone .form-label,
+.raster-upload-dropzone .form-label {
+  display: none;
+}
+
+.geo-upload-dropzone .shiny-input-container,
+.raster-upload-dropzone .shiny-input-container {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.geo-upload-dropzone .input-group,
+.raster-upload-dropzone .input-group {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0.45rem;
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.geo-upload-dropzone .input-group > *,
+.raster-upload-dropzone .input-group > * {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.geo-upload-dropzone .btn,
+.raster-upload-dropzone .btn {
+  width: 100%;
+  border: 0;
+  border-radius: 0.55rem !important;
+  background: var(--ls-accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.geo-upload-dropzone .form-control,
+.raster-upload-dropzone .form-control {
+  display: block;
+  grid-column: 1 / -1;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  flex: none !important;
+  flex-basis: 100% !important;
+  box-sizing: border-box;
+  min-height: 5.2rem;
+  border: 2px dashed rgba(23, 107, 91, 0.38);
+  border-radius: 0.7rem !important;
+  background: rgba(23, 107, 91, 0.045);
+  color: var(--ls-muted);
+  cursor: pointer;
+  white-space: normal;
+}
+
+.geo-upload-dropzone input[type="file"],
+.raster-upload-dropzone input[type="file"] {
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: none !important;
+}
+
+.geo-upload-dropzone .form-control:hover,
+.geo-upload-dropzone .form-control:focus,
+.raster-upload-dropzone .form-control:hover,
+.raster-upload-dropzone .form-control:focus {
+  border-color: var(--ls-accent);
+  background: rgba(23, 107, 91, 0.08);
+  box-shadow: 0 0 0 0.18rem rgba(23, 107, 91, 0.12);
+}
+
+.geo-upload-dropzone.drag-active .form-control,
+.raster-upload-dropzone.drag-active .form-control {
+  border-color: var(--ls-accent);
+  background: rgba(23, 107, 91, 0.12);
+  box-shadow: 0 0 0 0.22rem rgba(23, 107, 91, 0.16);
+}
+
+.geo-upload-dropzone .progress,
+.raster-upload-dropzone .progress {
+  background-color: rgba(23, 107, 91, 0.12) !important;
+}
+
+.geo-upload-dropzone .progress-bar,
+.raster-upload-dropzone .progress-bar,
+.geo-upload-dropzone .bar,
+.raster-upload-dropzone .bar {
+  background-color: var(--ls-accent) !important;
+  border-color: var(--ls-accent) !important;
+}
+
+.geo-upload-dropzone .progress-bar-danger,
+.raster-upload-dropzone .progress-bar-danger,
+.geo-upload-dropzone .bg-danger,
+.raster-upload-dropzone .bg-danger {
+  background-color: var(--ls-accent) !important;
+}
+
+.custom-classes-extra {
+  margin-top: 0.75rem;
+}
+
+.custom-classes-header,
+.custom-class-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.custom-class-card {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid rgba(23, 107, 91, 0.14);
+  border-radius: 0.55rem;
+  background: rgba(23, 107, 91, 0.035);
+}
+
+.custom-class-card .form-group,
+.custom-class-card .shiny-input-container {
+  margin-bottom: 0.55rem;
+}
+
+.progress-status {
+  display: grid;
+  gap: 0.2rem;
+  margin: 1rem 0 0.45rem;
+}
+
+.progress {
+  height: 0.8rem;
+  background: #dce7e4;
+}
+
+.run-analysis-button {
+  margin-bottom: 1rem;
+}
+
+.run-feedback-box {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.run-feedback-box:empty {
+  display: none;
+}
+
+.raster-validation-result {
+  margin-top: 0.8rem;
+}
+
+.raster-progress-status {
+  margin-top: 0;
+}
+
+.raster-progress {
+  height: 1.1rem;
+}
+
+.results-table-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.8rem 1rem;
+  width: 100%;
+}
+
+.results-level-control {
+  flex: 1 1 14rem;
+  max-width: 22rem;
+}
+
+.results-level-control .shiny-input-container {
+  margin-bottom: 0;
+}
+
+.results-download-button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0.5rem;
+  font-weight: 700;
+}
+
+.field-hint {
+  margin: -0.55rem 0 0.75rem;
+  color: var(--ls-muted);
+  font-size: 0.83rem;
+  line-height: 1.35;
+}
+
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.dt-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.dt-buttons .dt-button {
+  margin: 0 !important;
+  border: 1px solid rgba(23, 107, 91, 0.25) !important;
+  border-radius: 0.35rem !important;
+  background: #fff !important;
+  color: var(--ls-accent) !important;
+  box-shadow: none !important;
+}
+
+.dt-buttons .dt-button:hover {
+  background: rgba(23, 107, 91, 0.08) !important;
+}
+
+.source-results-card {
+  flex: 0 0 auto !important;
+  min-height: 250px;
+  overflow: visible !important;
+}
+
+.source-results-card .card-body {
+  overflow: visible !important;
+}
+
+.source-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+}
+
+.plot-language-switch {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.plot-language-switch .language-button {
+  min-width: 9.5rem;
+  border-radius: 999px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.plot-language-switch .language-button.active {
+  box-shadow: 0 0 0 0.2rem rgba(23, 107, 91, 0.16);
+}
+
+.citation-footer {
+  width: 100%;
+  padding: 1.25rem max(1rem, 3vw) 1.5rem;
+}
+
+.citation-card {
+  max-width: 1500px;
+  margin: 0 auto;
+  border-top: 4px solid var(--ls-gold);
+}
+
+.citation-text {
+  margin: 0.5rem 0 1rem;
+  padding: 0.85rem 1rem;
+  border-left: 4px solid var(--ls-accent);
+  background: rgba(23, 107, 91, 0.055);
+}
+
+.citation-reminder {
+  margin-bottom: 0;
+  color: var(--ls-muted);
+}
+
+.institutional-footer {
+  padding: 0 1rem 1.6rem;
+}
+
+.institutional-footer-inner {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem;
+  border: 1px solid rgba(23, 107, 91, 0.1);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 10px 30px rgba(26, 50, 44, 0.05);
+}
+
+.institutional-footer-label {
+  display: block;
+  margin-bottom: 0.85rem;
+  color: var(--ls-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.institutional-logo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1.4rem, 5vw, 4rem);
+}
+
+.institutional-logo {
+  display: block;
+  width: auto;
+  max-width: min(100%, 18rem);
+  object-fit: contain;
+}
+
+.logo-unb {
+  height: 4.8rem;
+}
+
+.logo-progysat {
+  height: 4.1rem;
+  max-width: min(100%, 24rem);
+}
+
+.logo-odisseia {
+  height: 4.3rem;
+}
+
+.reset-app-button {
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #fff;
+  font-weight: 700;
+  margin-left: 0.7rem;
+}
+
+.reset-app-button:hover,
+.reset-app-button:focus {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.9);
+  color: #fff;
+}
+
+.download-grid .shiny-download-link {
+  width: 100%;
+}
+
+.folder-picker-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.folder-picker-actions .btn:first-child {
+  flex: 1;
+}
+
+.folder-selection {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(23, 107, 91, 0.18);
+  border-radius: 0.45rem;
+  background: rgba(23, 107, 91, 0.06);
+  color: var(--ls-ink);
+}
+
+.folder-selection span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-selection-empty {
+  color: var(--ls-muted);
+  background: rgba(87, 112, 107, 0.05);
+}
+
+.value-box {
+  min-height: 9rem;
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: rgba(23, 107, 91, 0.55);
+  box-shadow: 0 0 0 0.2rem rgba(23, 107, 91, 0.13);
+}
+
+.btn-success {
+  box-shadow: 0 7px 18px rgba(44, 140, 101, 0.22);
+}
+
+@media (max-width: 768px) {
+  .brand-lockup strong {
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .download-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .source-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plot-language-switch {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .plot-language-switch .language-button {
+    flex: 1 1 10rem;
+  }
+}
