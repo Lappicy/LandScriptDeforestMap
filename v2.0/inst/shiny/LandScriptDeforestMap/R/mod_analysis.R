@@ -569,7 +569,7 @@ analysis_server <- function(id) {
       geo_invalid_geometry(FALSE)
       toggle_run_button(TRUE)
       set_geo_validation_progress(3, "Leitura do arquivo", "Abrindo prévia rápida para o mapa.")
-      preview <- read_geo_preview(path, simplify_tolerance_m = 250)
+      preview <- read_geo_preview(path, tolerance_fraction = 0.001)
       geo_preview(preview)
       preview_is_bbox <- identical(attr(preview, "landscript_preview_type"), "bbox")
       columns <- if (isTRUE(preview_is_bbox)) {

@@ -147,21 +147,74 @@ preview_simplify_tolerance_degrees <- function(geo, tolerance_m) {
   )
 }
 
-simplify_geo_preview <- function(geo, tolerance_m = 250) {
-  if (!inherits(geo, "sf") || !nrow(geo)) return(geo)
-  tolerance_degrees <- preview_simplify_tolerance_degrees(geo, tolerance_m)
-  if (!is.finite(tolerance_degrees) || tolerance_degrees <= 0) return(geo)
+preview_simplify_tolerance_native <- function(geo, fraction = 0.001) {
+  if (!inherits(geo, "sf") || !nrow(geo)) return(NA_real_)
+  fraction <- suppressWarnings(as.numeric(fraction %||% NA_real_))
+  if (!is.finite(fraction) || fraction <= 0) fraction <- 0.001
 
-  simplified <- tryCatch(
-    suppressWarnings(sf::st_simplify(geo, dTolerance = tolerance_degrees, preserveTopology = FALSE)),
-    error = function(e) geo
+  bbox <- sf::st_bbox(geo)
+  width <- abs(as.numeric(bbox[["xmax"]] - bbox[["xmin"]]))
+  height <- abs(as.numeric(bbox[["ymax"]] - bbox[["ymin"]]))
+  base_extent <- if (is.finite(width) && width > 0) width else height
+  tolerance <- base_extent * fraction
+  if (!is.finite(tolerance) || tolerance <= 0) return(NA_real_)
+  tolerance
+}
+
+geometry_coordinate_count <- function(geo) {
+  tryCatch(
+    nrow(sf::st_coordinates(geo)),
+    error = function(e) NA_integer_
   )
+}
+
+simplify_geo_preview <- function(
+  geo,
+  tolerance_m = NULL,
+  tolerance_fraction = 0.001,
+  max_coordinates = 100000L,
+  max_iterations = 6L
+) {
+  if (!inherits(geo, "sf") || !nrow(geo)) return(geo)
+  longlat <- isTRUE(sf::st_is_longlat(geo))
+  tolerance <- if (!is.null(tolerance_m) && is.finite(suppressWarnings(as.numeric(tolerance_m))) && as.numeric(tolerance_m) > 0) {
+    if (longlat) preview_simplify_tolerance_degrees(geo, tolerance_m) else as.numeric(tolerance_m)
+  } else {
+    preview_simplify_tolerance_native(geo, fraction = tolerance_fraction)
+  }
+  if (!is.finite(tolerance) || tolerance <= 0) return(geo)
+
+  previous_s2 <- sf::sf_use_s2()
+  if (longlat) {
+    suppressMessages(sf::sf_use_s2(FALSE))
+    on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
+  }
+
+  simplified <- geo
+  for (i in seq_len(max(1L, as.integer(max_iterations)))) {
+    candidate <- tryCatch(
+      suppressWarnings(sf::st_simplify(geo, dTolerance = tolerance, preserveTopology = FALSE)),
+      error = function(e) simplified
+    )
+    candidate <- drop_zm_geometry(candidate)
+    empty <- tryCatch(sf::st_is_empty(candidate), error = function(e) rep(FALSE, nrow(candidate)))
+    if (any(empty)) candidate <- candidate[!empty, , drop = FALSE]
+    if (nrow(candidate)) simplified <- candidate
+
+    coordinate_count <- geometry_coordinate_count(simplified)
+    if (!is.finite(coordinate_count) || coordinate_count <= max_coordinates) break
+    tolerance <- tolerance * 2
+  }
+
   simplified <- drop_zm_geometry(simplified)
   empty <- tryCatch(sf::st_is_empty(simplified), error = function(e) rep(FALSE, nrow(simplified)))
   if (any(empty)) simplified <- simplified[!empty, , drop = FALSE]
   if (!nrow(simplified)) return(geo)
   sf::st_geometry(simplified) <- "geometry"
-  attr(simplified, "preview_simplified_tolerance_m") <- tolerance_m
+  attr(simplified, "landscript_preview_type") <- "simplified"
+  attr(simplified, "preview_simplified_tolerance") <- tolerance
+  attr(simplified, "preview_simplified_units") <- if (longlat) "graus" else (sf::st_crs(geo)$units_gdal %||% "unidades do CRS")
+  attr(simplified, "preview_coordinate_count") <- geometry_coordinate_count(simplified)
   simplified
 }
 
@@ -233,17 +286,9 @@ read_geo_preview <- function(
   file_name,
   projection_wanted = 4326,
   layer = NULL,
-  simplify_tolerance_m = 250,
-  bbox_threshold_mb = 25
+  simplify_tolerance_m = NULL,
+  tolerance_fraction = 0.001
 ) {
-  if (!inherits(file_name, "sf") && file.exists(file_name)) {
-    size_mb <- file.info(file_name)$size / 1024^2
-    if (is.finite(size_mb) && size_mb >= bbox_threshold_mb) {
-      bbox_preview <- read_gpkg_bbox_preview(file_name, projection_wanted = projection_wanted, layer = layer)
-      if (!is.null(bbox_preview)) return(bbox_preview)
-    }
-  }
-
   if (inherits(file_name, "sf")) {
     geo <- file_name
   } else {
@@ -267,7 +312,11 @@ read_geo_preview <- function(
   }
   geo <- drop_zm_geometry(geo)
   sf::st_geometry(geo) <- "geometry"
-  simplify_geo_preview(geo, simplify_tolerance_m)
+  simplify_geo_preview(
+    geo,
+    tolerance_m = simplify_tolerance_m,
+    tolerance_fraction = tolerance_fraction
+  )
 }
 
 geo_summary <- function(geo) {
