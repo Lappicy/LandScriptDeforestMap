@@ -83,11 +83,87 @@ parse_color_vector <- function(x, minimum = 1L) {
   colors
 }
 
-extract_year_from_name <- function(path) {
-  name <- basename(path)
-  hits <- regmatches(name, gregexpr("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])", name, perl = TRUE))[[1]]
-  if (!length(hits) || identical(hits, character(0))) return(NA_integer_)
-  as.integer(utils::tail(hits, 1L))
+extract_year_candidates_from_text <- function(text) {
+  text <- as.character(text %||% "")
+  hits <- gregexpr("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])", text, perl = TRUE)[[1]]
+  if (length(hits) == 1L && hits[[1]] == -1L) {
+    return(data.frame(start = integer(), end = integer(), year = integer()))
+  }
+  values <- regmatches(text, list(hits))[[1]]
+  data.frame(
+    start = as.integer(hits),
+    end = as.integer(hits + attr(hits, "match.length") - 1L),
+    year = as.integer(values),
+    stringsAsFactors = FALSE
+  )
+}
+
+extract_year_from_metadata <- function(path) {
+  out <- tryCatch({
+    raster <- terra::rast(path)
+    raster_time <- terra::time(raster)
+    if (length(raster_time) && !all(is.na(raster_time))) {
+      if (inherits(raster_time, c("Date", "POSIXct", "POSIXt"))) {
+        year <- as.integer(format(raster_time[[1]], "%Y"))
+      } else {
+        year <- suppressWarnings(as.integer(raster_time[[1]]))
+      }
+      if (is.finite(year) && year >= 1900L && year <= 2099L) {
+        return(year)
+      }
+    }
+
+    layer_candidates <- extract_year_candidates_from_text(paste(names(raster), collapse = " "))
+    if (nrow(layer_candidates)) {
+      return(layer_candidates$year[[nrow(layer_candidates)]])
+    }
+    NA_integer_
+  }, error = function(e) NA_integer_)
+  as.integer(out %||% NA_integer_)
+}
+
+extract_years_from_names <- function(files) {
+  stems <- tools::file_path_sans_ext(basename(files))
+
+  trailing <- vapply(stems, function(name) {
+    hit <- regmatches(name, regexpr("(?:19|20)[0-9]{2}$", name, perl = TRUE))
+    if (!length(hit) || identical(hit, character(0))) NA_integer_ else as.integer(hit)
+  }, integer(1))
+  if (!anyNA(trailing)) return(trailing)
+
+  candidates <- lapply(stems, extract_year_candidates_from_text)
+  common_positions <- Reduce(
+    intersect,
+    lapply(candidates, function(x) unique(x$start))
+  )
+  if (length(common_positions)) {
+    scored <- lapply(common_positions, function(position) {
+      years <- vapply(candidates, function(x) {
+        hit <- x[x$start == position, , drop = FALSE]
+        if (!nrow(hit)) NA_integer_ else hit$year[[1]]
+      }, integer(1))
+      data.frame(
+        position = position,
+        duplicated = anyDuplicated(years) > 0L,
+        missing = anyNA(years),
+        year_span = if (anyNA(years)) Inf else diff(range(years)),
+        years = I(list(years))
+      )
+    })
+    scored <- do.call(rbind, scored)
+    scored <- scored[!scored$missing, , drop = FALSE]
+    if (nrow(scored)) {
+      no_duplicates <- scored[!scored$duplicated, , drop = FALSE]
+      selected <- if (nrow(no_duplicates)) {
+        no_duplicates[order(no_duplicates$year_span, no_duplicates$position), , drop = FALSE][1, ]
+      } else {
+        scored[order(scored$year_span, scored$position), , drop = FALSE][1, ]
+      }
+      return(as.integer(selected$years[[1]]))
+    }
+  }
+
+  rep(NA_integer_, length(files))
 }
 
 list_raster_files <- function(folder) {
@@ -112,10 +188,15 @@ list_raster_files <- function(folder) {
     stop("Nenhum raster suportado foi encontrado na pasta.", call. = FALSE)
   }
 
-  years <- vapply(files, extract_year_from_name, integer(1))
+  years <- extract_years_from_names(files)
+  if (anyNA(years)) {
+    metadata_years <- vapply(files[is.na(years)], extract_year_from_metadata, integer(1))
+    years[is.na(years)] <- metadata_years
+  }
+  years <- unname(as.integer(years))
   if (anyNA(years)) {
     stop(
-      "Não foi possível identificar um ano de quatro dígitos no nome de: ",
+      "anos não encontrados. Não foi possível identificar o ano no nome ou nos metadados de: ",
       paste(basename(files[is.na(years)]), collapse = ", "),
       call. = FALSE
     )
@@ -596,7 +677,9 @@ select_preferred_result_file <- function(files) {
       name <- tolower(basename(path))
       layers <- tryCatch(sf::st_layers(path)$name, error = function(e) character())
       score <- 0
+      if ("grid" %in% layers) score <- score + 1500
       if ("mesh" %in% layers) score <- score + 1000
+      if (all(c("grid", "mesh", "groups", "total") %in% layers)) score <- score + 700
       if (all(c("mesh", "groups", "total") %in% layers)) score <- score + 500
       if (!startsWith(name, "simplified_") && !grepl("simplificado", name)) {
         score <- score + 300
@@ -650,7 +733,10 @@ select_preferred_result_file <- function(files) {
     }, logical(1))
     if (any(valid)) {
       selected <- rds_files[valid][[1]]
-      return(list(path = selected, type = "objeto R completo", layers = c("mesh", "groups", "total")))
+      object <- readRDS(selected)
+      layers <- c("grid", "mesh", "groups", "total")
+      layers <- layers[layers %in% names(object)]
+      return(list(path = selected, type = "objeto R completo", layers = layers))
     }
   }
 
@@ -678,10 +764,9 @@ prepare_result_download_zip <- function(result, destination) {
 
   wanted_keys <- c(
     "complete_xlsx",
-    "simplified_xlsx",
-    "complete_gpkg",
-    "simplified_gpkg"
+    names(result$files)[grepl("gpkg", names(result$files))]
   )
+  wanted_keys <- unique(wanted_keys[nzchar(wanted_keys)])
   files <- result$files[wanted_keys]
   missing_keys <- wanted_keys[
     is.na(files) |

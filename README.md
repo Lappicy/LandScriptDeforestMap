@@ -1,4 +1,4 @@
-# LandScriptDeforestMap 2.0
+# LandScriptDeforestMap 2.0.0
 
 Esta versão reúne:
 

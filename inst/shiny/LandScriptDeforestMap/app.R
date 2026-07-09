@@ -105,6 +105,25 @@ app_footer <- function() {
   )
 }
 
+testing_notice <- function() {
+  shiny::div(
+    class = "testing-notice",
+    shiny::span(
+      shiny::icon("flask"),
+      " Este dashboard está em fase de testes. Para reportar erros, bugs, sugestões ou dúvidas, responda o ",
+      shiny::a(
+        "formulário",
+        href = "https://forms.gle/SdzYLxZKnSYvWKnY7",
+        target = "_blank",
+        rel = "noopener noreferrer"
+      ),
+      " ou envie e-mail para ",
+      shiny::a("lappicy@gmail.com", href = "mailto:lappicy@gmail.com"),
+      "."
+    )
+  )
+}
+
 ui <- bslib::page_navbar(
   title = shiny::div(
     class = "brand-lockup",
@@ -276,7 +295,8 @@ ui <- bslib::page_navbar(
            }
          })();"
       ))
-    )
+    ),
+    testing_notice()
   ),
   bslib::nav_panel(
     "Executar análise",
