@@ -773,17 +773,6 @@ analysis_server <- function(id) {
 
       mesh <- tryCatch(preview_mesh(), error = function(e) NULL)
       bbox <- sf::st_bbox(geo)
-      map <- map |>
-        leaflet::addPolygons(
-          data = geo,
-          fill = TRUE,
-          fillColor = "#000000",
-          fillOpacity = 0.6,
-          color = "transparent",
-          weight = 0,
-          opacity = 0,
-          group = "Prévia do limite"
-        )
       if (!is.null(mesh)) {
         preview <- mesh_for_leaflet(mesh)
         map <- map |>
@@ -797,6 +786,17 @@ analysis_server <- function(id) {
             group = "Malha"
           )
       }
+      map <- map |>
+        leaflet::addPolygons(
+          data = geo,
+          fill = TRUE,
+          fillColor = "#000000",
+          fillOpacity = 0.6,
+          color = "transparent",
+          weight = 0,
+          opacity = 0,
+          group = "Prévia do limite"
+        )
       map |>
         leaflet::addLayersControl(
           baseGroups = c("Satélite (Esri)", "Ruas"),
