@@ -141,15 +141,24 @@ aggregate_result_level <- function(
   geometry,
   by_columns,
   value_columns,
-  level_name,
-  group_column
+  level_name
 ) {
-  summary <- unit_table |>
-    dplyr::group_by(dplyr::across(dplyr::all_of(c(by_columns, "Year")))) |>
-    dplyr::summarise(
-      dplyr::across(dplyr::all_of(value_columns), ~ sum(.x, na.rm = TRUE)),
-      .groups = "drop"
-    )
+  by_columns <- normalize_group_columns(by_columns, max_columns = 2L)
+  if (length(by_columns)) {
+    summary <- unit_table |>
+      dplyr::group_by(dplyr::across(dplyr::all_of(c(by_columns, "Year")))) |>
+      dplyr::summarise(
+        dplyr::across(dplyr::all_of(value_columns), ~ sum(.x, na.rm = TRUE)),
+        .groups = "drop"
+      )
+  } else {
+    summary <- unit_table |>
+      dplyr::group_by(.data$Year) |>
+      dplyr::summarise(
+        dplyr::across(dplyr::all_of(value_columns), ~ sum(.x, na.rm = TRUE)),
+        .groups = "drop"
+      )
+  }
 
   summary <- add_variations(
     summary,
@@ -157,9 +166,9 @@ aggregate_result_level <- function(
     value_columns = value_columns
   )
 
-  if (identical(level_name, "Grupo")) {
-    geo <- geometry[, c(group_column, "geometry")]
-    summary <- dplyr::left_join(summary, geo, by = group_column)
+  if (length(by_columns)) {
+    geo <- geometry[, c(by_columns, "geometry")]
+    summary <- dplyr::left_join(summary, geo, by = by_columns)
   } else {
     geo <- geometry
     summary$BoundaryGroup <- "Área total"
@@ -170,21 +179,65 @@ aggregate_result_level <- function(
   sf::st_as_sf(summary, sf_column_name = "geometry", crs = sf::st_crs(geometry))
 }
 
-drop_raw_class_columns <- function(data) {
-  geometry_column <- attr(data, "sf_column") %||% "geometry"
-  names_to_drop <- names(data)[
-    !is.na(suppressWarnings(as.numeric(names(data)))) |
-      grepl("^Variation_[0-9]+$", names(data))
-  ]
-  data[, setdiff(names(data), names_to_drop), drop = FALSE]
+aggregate_boundary_geometry <- function(boundaries, by_columns) {
+  by_columns <- normalize_group_columns(by_columns, max_columns = 2L)
+  if (!length(by_columns)) return(boundaries)
+
+  previous_s2 <- sf::sf_use_s2()
+  suppressMessages(sf::sf_use_s2(FALSE))
+  on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
+
+  out <- boundaries |>
+    dplyr::group_by(dplyr::across(dplyr::all_of(by_columns))) |>
+    dplyr::summarise(geometry = suppressMessages(suppressWarnings(sf::st_union(.data$geometry))), .groups = "drop")
+  sf::st_as_sf(out, sf_column_name = "geometry", crs = sf::st_crs(boundaries))
 }
 
-write_result_layers <- function(path, layers, simplified = FALSE) {
+aggregate_grid_result <- function(unit_table, mesh, value_columns) {
+  if (!"Grid_ID" %in% names(unit_table) || !"Grid_ID" %in% names(mesh)) {
+    stop("A tabela da malha precisa conter Grid_ID para agregar por quadrícula.", call. = FALSE)
+  }
+
+  summary <- unit_table |>
+    dplyr::group_by(.data$Grid_ID, .data$Year) |>
+    dplyr::summarise(
+      dplyr::across(dplyr::all_of(value_columns), ~ sum(.x, na.rm = TRUE)),
+      .groups = "drop"
+    )
+
+  summary <- add_variations(
+    summary,
+    id_columns = "Grid_ID",
+    value_columns = value_columns
+  )
+
+  previous_s2 <- sf::sf_use_s2()
+  suppressMessages(sf::sf_use_s2(FALSE))
+  on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
+
+  mesh_geometry <- mesh[, c("Grid_ID", "geometry")]
+  grid_geometry <- tryCatch({
+    metric <- sf::st_transform(mesh_geometry, 5880)
+    metric <- metric |>
+      dplyr::group_by(.data$Grid_ID) |>
+      dplyr::summarise(geometry = suppressMessages(suppressWarnings(sf::st_union(.data$geometry))), .groups = "drop")
+    sf::st_transform(metric, sf::st_crs(mesh))
+  }, error = function(e) {
+    mesh_geometry |>
+      dplyr::group_by(.data$Grid_ID) |>
+      dplyr::summarise(geometry = suppressMessages(suppressWarnings(sf::st_union(.data$geometry))), .groups = "drop")
+  })
+
+  summary <- dplyr::left_join(summary, grid_geometry, by = "Grid_ID")
+  summary$AnalysisLevel <- "Quadrícula"
+  sf::st_as_sf(summary, sf_column_name = "geometry", crs = sf::st_crs(mesh))
+}
+
+write_result_layers <- function(path, layers) {
   if (file.exists(path)) unlink(path)
   first <- TRUE
   for (layer_name in names(layers)) {
     object <- layers[[layer_name]]
-    if (simplified) object <- drop_raw_class_columns(object)
     sf::st_write(
       object,
       dsn = path,
@@ -197,24 +250,64 @@ write_result_layers <- function(path, layers, simplified = FALSE) {
   normalizePath(path, mustWork = TRUE)
 }
 
-result_excel_sheets <- function(layers, simplified = FALSE) {
+split_result_layers <- function(layers) {
+  group_layer_names <- grep("^groups", names(layers), value = TRUE)
+  list(
+    ID_mesh = layers["mesh"],
+    Grid_ID = layers["grid"],
+    Grupos = layers[group_layer_names],
+    Total = layers["total"]
+  )
+}
+
+write_result_geopackages <- function(
+  output_folder,
+  output_name,
+  layers,
+  threshold_bytes = 2 * 1024^3
+) {
+  split_layers <- split_result_layers(layers)
+  split_layers <- split_layers[lengths(split_layers) > 0L]
+
+  split_paths <- vapply(names(split_layers), function(layer_group) {
+    path <- file.path(output_folder, paste0(output_name, "_", layer_group, ".gpkg"))
+    write_result_layers(path, split_layers[[layer_group]])
+  }, character(1))
+
+  total_size <- sum(file.info(split_paths)$size, na.rm = TRUE)
+  if (is.finite(total_size) && total_size <= threshold_bytes) {
+    combined_path <- file.path(output_folder, paste0(output_name, ".gpkg"))
+    write_result_layers(combined_path, layers)
+    safe_unlink(split_paths)
+    return(setNames(normalizePath(combined_path, mustWork = TRUE), "complete_gpkg"))
+  }
+
+  stats::setNames(
+    normalizePath(split_paths, mustWork = TRUE),
+    paste0("complete_gpkg_", tolower(names(split_paths)))
+  )
+}
+
+result_excel_sheets <- function(layers) {
   sheet_names <- c(
+    grid = "Grid_ID",
     mesh = "Malha",
     groups = "Grupos",
+    groups_1 = "Grupos 1",
+    groups_2 = "Grupos 2",
     total = "Total"
   )
   sheets <- lapply(layers, function(object) {
-    if (simplified) object <- drop_raw_class_columns(object)
     sf::st_drop_geometry(object)
   })
   names(sheets) <- unname(sheet_names[names(sheets)] %||% names(sheets))
   sheets
 }
 
-write_result_workbook <- function(path, layers, simplified = FALSE) {
+write_result_workbook <- function(path, layers) {
   if (file.exists(path)) unlink(path)
   writexl::write_xlsx(
-    result_excel_sheets(layers, simplified = simplified),
+    result_excel_sheets(layers),
     path
   )
   normalizePath(path, mustWork = TRUE)
@@ -292,7 +385,7 @@ analysis_fingerprint <- function(params) {
       size = unname(raster_info$size),
       stringsAsFactors = FALSE
     ),
-    group_column = params$group_column %||% "",
+    group_column = normalize_group_columns(params$group_column %||% character(), max_columns = 2L),
     no_mesh = isTRUE(params$no_mesh),
     mesh_size = params$mesh_size %||% NA_real_,
     mesh_unit = params$mesh_unit %||% "degrees",
@@ -338,16 +431,11 @@ prepare_proxy_inputs <- function(params, proxy_dir) {
 
 analysis_result_files_ready <- function(result) {
   if (is.null(result) || is.null(result$files)) return(FALSE)
-  required <- c("complete_xlsx", "simplified_xlsx", "complete_gpkg", "simplified_gpkg")
-  files <- result$files[required]
-  all(!is.na(files) & file.exists(files))
-}
-
-ensure_result_zip <- function(result) {
-  zip_path <- file.path(result$output_folder, paste0(result$output_name, "_resultados.zip"))
-  prepare_result_download_zip(result, zip_path)
-  result$files["result_zip"] <- normalizePath(zip_path, mustWork = TRUE)
-  result
+  xlsx_files <- result$files["complete_xlsx"]
+  gpkg_files <- result$files[grepl("gpkg", names(result$files))]
+  all(!is.na(xlsx_files) & file.exists(xlsx_files)) &&
+    length(gpkg_files) > 0L &&
+    all(!is.na(gpkg_files) & file.exists(gpkg_files))
 }
 
 run_land_analysis <- function(params, progress_file = NULL) {
@@ -405,12 +493,11 @@ run_land_analysis <- function(params, progress_file = NULL) {
 
   final_checkpoint <- read_checkpoint(proxy_dir, "result")
   if (analysis_result_files_ready(final_checkpoint)) {
-    progress(98, "Retomada", "Resultado final encontrado; conferindo ZIP.")
-    final_checkpoint <- ensure_result_zip(final_checkpoint)
+    progress(98, "Retomada", "Resultado final encontrado; conferindo arquivos.")
     write_checkpoint(final_checkpoint, proxy_dir, "result")
     progress(99, "Limpeza", "Removendo pasta proxy temporária.")
     safe_unlink(proxy_dir)
-    progress(100, "Concluído", "Resultado retomado, ZIP salvo e pasta proxy removida.", "complete")
+    progress(100, "Concluído", "Resultado retomado e pasta proxy removida.", "complete")
     return(final_checkpoint)
   }
 
@@ -421,35 +508,35 @@ run_land_analysis <- function(params, progress_file = NULL) {
   if (!is.null(mesh_checkpoint)) {
     progress(14, "Retomada", "Usando limites e malha salvos na pasta proxy.")
     boundaries <- mesh_checkpoint$boundaries
-    group_column <- mesh_checkpoint$group_column
+    group_columns <- mesh_checkpoint$group_columns %||% mesh_checkpoint$group_column
     overlap_removed <- mesh_checkpoint$overlap_removed
     mesh <- mesh_checkpoint$mesh
   } else {
     validate_shapefile_geometry(params$geo_path)
     geo <- read_geo(params$geo_path)
-    group_column <- params$group_column
-    if (is.null(group_column) || !nzchar(group_column) || identical(group_column, ".ALL")) {
-      group_column <- "BoundaryGroup"
-    }
+    group_columns <- normalize_group_columns(params$group_column %||% character(), max_columns = 2L)
 
     progress(10, "Limites", "Dissolvendo classes e removendo sobreposições")
     boundaries <- prepare_group_boundaries(geo, params$group_column)
-    group_column <- attr(boundaries, "group_column")
+    group_columns <- attr(boundaries, "group_columns") %||% attr(boundaries, "group_column")
     overlap_removed <- isTRUE(attr(boundaries, "overlap_removed"))
 
     progress(14, "Malha", "Criando e recortando a malha quadrangular")
     mesh <- create.mesh(
       boundaries,
       mesh.size = if (isTRUE(params$no_mesh)) NULL else params$mesh_size,
-      group.column = group_column,
+      group.column = group_columns,
       max.cells = params$max_cells %||% 50000L,
       mesh.unit = params$mesh_unit %||% "degrees"
     )
-    mesh[[group_column]] <- factor(mesh[[group_column]])
+    for (column in group_columns) {
+      mesh[[column]] <- factor(mesh[[column]])
+    }
     write_checkpoint(
       list(
         boundaries = boundaries,
-        group_column = group_column,
+        group_column = group_columns,
+        group_columns = group_columns,
         overlap_removed = overlap_removed,
         mesh = mesh
       ),
@@ -502,7 +589,9 @@ run_land_analysis <- function(params, progress_file = NULL) {
 
   attributes <- sf::st_drop_geometry(mesh)
   unit_table <- dplyr::left_join(counts, attributes, by = "ID_mesh")
-  unit_table[[group_column]] <- factor(unit_table[[group_column]])
+  for (column in group_columns) {
+    unit_table[[column]] <- factor(unit_table[[column]])
+  }
 
   progress(78, "Classes", paste0("Aplicando a legenda MAPBIOMAS ", params$mapbiomas))
   unit_table <- count.classes(
@@ -523,42 +612,57 @@ run_land_analysis <- function(params, progress_file = NULL) {
   unit_results <- dplyr::left_join(unit_table, mesh[, c("ID_mesh", "geometry")], by = "ID_mesh")
   unit_results <- sf::st_as_sf(unit_results, sf_column_name = "geometry", crs = sf::st_crs(mesh))
 
-  progress(89, "Agregação", "Gerando resultados por grupo e para a área total")
-  group_geometry <- boundaries[, c(group_column, "geometry")]
+  progress(89, "Agregação", "Gerando resultados por quadrícula, grupo e área total")
+  grid_results <- aggregate_grid_result(
+    unit_table,
+    mesh,
+    value_columns = value_columns
+  )
+
+  group_geometry <- boundaries[, c(group_columns, "geometry")]
   group_results <- aggregate_result_level(
     unit_table,
     group_geometry,
-    by_columns = group_column,
+    by_columns = group_columns,
     value_columns = value_columns,
-    level_name = "Grupo",
-    group_column = group_column
+    level_name = "Grupo"
   )
 
+  group_level_results <- list()
+  if (length(group_columns) > 1L) {
+    for (i in seq_along(group_columns)) {
+      group_level_geometry <- aggregate_boundary_geometry(boundaries, group_columns[[i]])
+      group_level_results[[paste0("groups_", i)]] <- aggregate_result_level(
+        unit_table,
+        group_level_geometry,
+        by_columns = group_columns[[i]],
+        value_columns = value_columns,
+        level_name = paste0("Grupo ", i)
+      )
+    }
+  }
+
   total_geometry <- sf::st_sf(
-    geometry = sf::st_sfc(suppressWarnings(sf::st_union(boundaries)), crs = sf::st_crs(boundaries))
+    geometry = sf::st_sfc(safe_st_union(sf::st_geometry(boundaries)), crs = sf::st_crs(boundaries))
   )
   total_results <- aggregate_result_level(
     unit_table,
     total_geometry,
     by_columns = character(),
     value_columns = value_columns,
-    level_name = "Total",
-    group_column = group_column
+    level_name = "Total"
   )
 
   progress(94, "Exportação", "Salvando tabelas e GeoPackages")
-  layers <- list(mesh = unit_results, groups = group_results, total = total_results)
+  layers <- c(
+    list(grid = grid_results, mesh = unit_results, groups = group_results),
+    group_level_results,
+    list(total = total_results)
+  )
   complete_table <- dplyr::bind_rows(lapply(layers, sf::st_drop_geometry))
-  simplified_table <- dplyr::bind_rows(lapply(layers, function(x) {
-    sf::st_drop_geometry(drop_raw_class_columns(x))
-  }))
 
   complete_txt <- file.path(output_folder, paste0(output_name, ".txt"))
-  simplified_txt <- file.path(output_folder, paste0("Simplified_", output_name, ".txt"))
-  complete_gpkg <- file.path(output_folder, paste0(output_name, ".gpkg"))
-  simplified_gpkg <- file.path(output_folder, paste0("Simplified_", output_name, ".gpkg"))
   complete_xlsx <- file.path(output_folder, paste0(output_name, ".xlsx"))
-  simplified_xlsx <- file.path(output_folder, paste0("Simplified_", output_name, ".xlsx"))
   pixels_txt <- file.path(output_folder, paste0(output_name, "_CalcRasterPixels.txt"))
   result_rds <- file.path(output_folder, paste0(output_name, ".rds"))
 
@@ -567,49 +671,41 @@ run_land_analysis <- function(params, progress_file = NULL) {
     row.names = FALSE, fileEncoding = "UTF-8"
   )
   utils::write.table(
-    simplified_table, simplified_txt, sep = "\t", dec = ".", quote = FALSE,
-    row.names = FALSE, fileEncoding = "UTF-8"
-  )
-  utils::write.table(
     counts, pixels_txt, sep = "\t", dec = ".", quote = FALSE,
     row.names = FALSE, fileEncoding = "UTF-8"
   )
-  write_result_layers(complete_gpkg, layers, simplified = FALSE)
-  write_result_layers(simplified_gpkg, layers, simplified = TRUE)
-  write_result_workbook(complete_xlsx, layers, simplified = FALSE)
-  write_result_workbook(simplified_xlsx, layers, simplified = TRUE)
+  write_result_workbook(complete_xlsx, layers)
+  gpkg_files <- write_result_geopackages(output_folder, output_name, layers)
 
   result <- list(
+    grid = grid_results,
     mesh = unit_results,
     groups = group_results,
+    groups_1 = group_level_results[["groups_1"]],
+    groups_2 = group_level_results[["groups_2"]],
     total = total_results,
     complete_table = complete_table,
-    simplified_table = simplified_table,
     raster_index = raster_index,
-    group_column = group_column,
+    group_column = group_columns,
+    group_columns = group_columns,
     summary_class_columns = summary_class_columns,
     output_name = output_name,
     output_folder = output_folder,
     overlap_removed = overlap_removed,
     files = c(
       complete_table = normalizePath(complete_txt),
-      simplified_table = normalizePath(simplified_txt),
-      complete_gpkg = normalizePath(complete_gpkg),
-      simplified_gpkg = normalizePath(simplified_gpkg),
       complete_xlsx = normalizePath(complete_xlsx),
-      simplified_xlsx = normalizePath(simplified_xlsx),
+      gpkg_files,
       pixel_counts = normalizePath(pixels_txt),
       result_rds = normalizePath(result_rds, mustWork = FALSE)
     )
   )
   saveRDS(result, result_rds)
-  result <- ensure_result_zip(result)
-  saveRDS(result, result_rds)
   write_checkpoint(result, proxy_dir, "result")
 
   progress(99, "Limpeza", "Removendo pasta proxy temporária.")
   safe_unlink(proxy_dir)
-  progress(100, "Concluído", "Análise finalizada, arquivos exportados e ZIP salvo.", "complete")
+  progress(100, "Concluído", "Análise finalizada e arquivos exportados.", "complete")
   result
 }
 

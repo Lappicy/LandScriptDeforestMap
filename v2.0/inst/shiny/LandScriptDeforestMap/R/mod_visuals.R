@@ -24,14 +24,21 @@ visuals_ui <- function(id) {
         shiny::selectInput(
           ns("gpkg_layer"),
           "Camada ou planilha",
-          choices = c("mesh", "groups", "total"),
-          selected = "mesh"
+          choices = c("grid", "mesh", "groups", "groups_1", "groups_2", "total"),
+          selected = "grid"
         ),
         shiny::selectInput(
           ns("auto_level"),
           "Resultado automático",
-          choices = c("Malha" = "mesh", "Grupos" = "groups", "Total" = "total"),
-          selected = "mesh"
+          choices = c(
+            "Grid_ID" = "grid",
+            "Malha" = "mesh",
+            "Grupos" = "groups",
+            "Grupos 1" = "groups_1",
+            "Grupos 2" = "groups_2",
+            "Total" = "total"
+          ),
+          selected = "grid"
         )
       ),
       shiny::uiOutput(ns("source_status")),
@@ -212,7 +219,7 @@ visuals_server <- function(id, automatic_result) {
           layers <- sf::st_layers(selected_path)$name
           if (!length(layers)) stop("O GeoPackage selecionado não possui camadas.", call. = FALSE)
           manual_layers(layers)
-          shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = if ("mesh" %in% layers) "mesh" else layers[[1]])
+          shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = if ("grid" %in% layers) "grid" else if ("mesh" %in% layers) "mesh" else layers[[1]])
           manual_kind("spatial")
         } else if (extension %in% setdiff(supported_vector_extensions(), "gpkg")) {
           manual_layers(NULL)
@@ -225,7 +232,7 @@ visuals_server <- function(id, automatic_result) {
           sheets <- readxl::excel_sheets(selected_path)
           if (!length(sheets)) stop("O arquivo Excel não possui planilhas.", call. = FALSE)
           manual_layers(sheets)
-          shiny::updateSelectInput(session, "gpkg_layer", choices = sheets, selected = if ("Malha" %in% sheets) "Malha" else sheets[[1]])
+          shiny::updateSelectInput(session, "gpkg_layer", choices = sheets, selected = if ("Grid_ID" %in% sheets) "Grid_ID" else if ("Malha" %in% sheets) "Malha" else sheets[[1]])
           manual_kind("table")
         } else if (extension %in% c("txt", "tsv", "csv")) {
           manual_layers(NULL)
@@ -234,13 +241,14 @@ visuals_server <- function(id, automatic_result) {
         } else if (extension == "rds") {
           object <- readRDS(selected_path)
           layers <- if (is.list(object) && all(c("mesh", "groups", "total") %in% names(object))) {
-            c("mesh", "groups", "total")
+            layers <- c("grid", "mesh", "groups", "groups_1", "groups_2", "total")
+            layers[layers %in% names(object)]
           } else {
             character()
           }
           manual_layers(layers)
           if (length(layers)) {
-            shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = "mesh")
+            shiny::updateSelectInput(session, "gpkg_layer", choices = layers, selected = if ("grid" %in% layers) "grid" else "mesh")
           }
           manual_kind("table")
         } else {
@@ -264,7 +272,11 @@ visuals_server <- function(id, automatic_result) {
       }
       result <- automatic_result()
       shiny::req(result)
-      result[[input$auto_level %||% "mesh"]]
+      level <- input$auto_level %||% if ("grid" %in% names(result)) "grid" else "mesh"
+      if (!level %in% names(result) || is.null(result[[level]])) {
+        level <- if ("grid" %in% names(result)) "grid" else "mesh"
+      }
+      result[[level]]
     })
 
     current_table <- shiny::reactive({

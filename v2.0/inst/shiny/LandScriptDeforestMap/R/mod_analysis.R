@@ -26,7 +26,16 @@ analysis_ui <- function(id) {
               placeholder = "Inserir o arquivo .gpkg, .shp, .zip, ou .json"
             ),
           ),
-          shiny::selectInput(ns("group_column"), "Coluna de limites/grupos", choices = NULL)
+          shiny::selectizeInput(
+            ns("group_column"),
+            "Colunas de limites/grupos (até 2)",
+            choices = NULL,
+            multiple = TRUE,
+            options = list(
+              maxItems = 2,
+              placeholder = "Nenhuma coluna = toda a área"
+            )
+          )
         ),
         bslib::accordion_panel(
           "2. Malha",
@@ -45,7 +54,8 @@ analysis_ui <- function(id) {
               post = " km",
               ticks = FALSE
             ),
-            shiny::helpText("Obs: A malha é criada em uma projeção métrica local e reprojetada para exibição no mapa.")
+            shiny::helpText("Obs: A malha é criada em uma projeção métrica local e reprojetada para exibição no mapa."),
+            shiny::uiOutput(ns("mesh_preview_notice"))
           )
         ),
         bslib::accordion_panel(
@@ -141,8 +151,15 @@ analysis_ui <- function(id) {
                 shiny::selectInput(
                   ns("result_level"),
                   "Nível exibido",
-                  choices = c("Malha" = "mesh", "Grupos" = "groups", "Total" = "total"),
-                  selected = "mesh"
+                  choices = c(
+                    "Grid_ID" = "grid",
+                    "Malha" = "mesh",
+                    "Grupos" = "groups",
+                    "Grupos 1" = "groups_1",
+                    "Grupos 2" = "groups_2",
+                    "Total" = "total"
+                  ),
+                  selected = "grid"
                 )
               ),
               shiny::downloadButton(
@@ -210,7 +227,7 @@ analysis_server <- function(id) {
       geo_path(NULL)
       geo_data(NULL)
       geo_invalid_geometry(TRUE)
-      shiny::updateSelectInput(session, "group_column", choices = NULL)
+      shiny::updateSelectizeInput(session, "group_column", choices = NULL, selected = character(), server = TRUE)
       validation_state(list(type = "danger", text = invalid_geometry_message()))
       toggle_run_button(TRUE)
       invisible(NULL)
@@ -377,13 +394,11 @@ analysis_server <- function(id) {
       geo_data(geo)
       geo_invalid_geometry(FALSE)
       columns <- names(sf::st_drop_geometry(geo))
-      selected_group_column <- if (length(columns)) columns[[1]] else ".ALL"
+      selected_group_columns <- character()
       mesh_recommendation <- recommend_mesh_size_km(
         geo,
-        default_km = 5,
-        max_cells = 20000L,
-        step_km = 5,
-        group_column = selected_group_column
+        target_cells = 1000L,
+        max_cells = 20000L
       )
       shiny::updateNumericInput(
         session,
@@ -397,19 +412,28 @@ analysis_server <- function(id) {
         max = max(100, mesh_recommendation$size_km),
         value = mesh_recommendation$size_km
       )
-      shiny::updateSelectInput(
+      shiny::updateSelectizeInput(
         session,
         "group_column",
-        choices = c("Toda a área (sem grupos)" = ".ALL", stats::setNames(columns, columns)),
-        selected = selected_group_column
+        choices = stats::setNames(columns, columns),
+        selected = selected_group_columns,
+        server = TRUE
       )
+      estimated_mesh_text <- if (is.finite(mesh_recommendation$estimated_cells)) {
+        paste0(
+          " (aprox. ",
+          format(round(mesh_recommendation$estimated_cells), big.mark = ".", decimal.mark = ","),
+          " quadrículas pela extensão)."
+        )
+      } else {
+        "."
+      }
       mesh_message <- if (isTRUE(mesh_recommendation$adjusted)) {
         paste0(
-          " A malha inicial foi ajustada automaticamente para ",
+          " Malha inicial sugerida automaticamente: ",
           format(mesh_recommendation$size_km, big.mark = ".", decimal.mark = ","),
-          " km, evitando estimar mais de ",
-          format(mesh_recommendation$max_cells, big.mark = ".", decimal.mark = ","),
-          " quadrículas."
+          " km",
+          estimated_mesh_text
         )
       } else {
         ""
@@ -519,12 +543,25 @@ analysis_server <- function(id) {
       millis = 650
     )
 
+    mesh_preview_notice <- shiny::reactiveVal(NULL)
+
     preview_mesh <- shiny::reactive({
       geo <- geo_data()
       shiny::req(geo)
+      mesh_preview_notice(NULL)
       if (!isTRUE(input$no_mesh)) {
         size_km <- mesh_size_debounced()
         shiny::validate(shiny::need(!is.null(size_km) && is.finite(size_km) && size_km > 0, "O tamanho da malha deve ser positivo."))
+        estimated_cells <- estimate_mesh_cells_km(geo, size_km)
+        preview_limit <- 20000L
+        if (is.finite(estimated_cells) && estimated_cells > preview_limit) {
+          mesh_preview_notice(paste0(
+            "Pré-visualização da malha omitida: esta configuração estima ",
+            format(round(estimated_cells), big.mark = ".", decimal.mark = ","),
+            " quadrículas. Aumente o tamanho da quadrícula para visualizar com mais fluidez."
+          ))
+          return(NULL)
+        }
         size <- size_km * 1000
       } else {
         size <- NULL
@@ -532,10 +569,16 @@ analysis_server <- function(id) {
       create.mesh(
         geo,
         mesh.size = size,
-        group.column = input$group_column %||% ".ALL",
-        max.cells = 500000L,
+        group.column = ".ALL",
+        max.cells = 20000L,
         mesh.unit = "meters"
       )
+    })
+
+    output$mesh_preview_notice <- shiny::renderUI({
+      notice <- mesh_preview_notice()
+      if (is.null(notice) || !nzchar(notice)) return(NULL)
+      app_alert(notice, color = "warning")
     })
 
     output$preview_map <- leaflet::renderLeaflet({
@@ -909,10 +952,11 @@ analysis_server <- function(id) {
       shiny::req(result)
       level <- input$result_level
       if (is.null(level) || length(level) != 1L || !nzchar(level)) {
-        level <- "mesh"
+        level <- if ("grid" %in% names(result)) "grid" else "mesh"
       }
-      if (!level %in% c("mesh", "groups", "total") || is.null(result[[level]])) {
-        level <- "mesh"
+      available_levels <- c("grid", "mesh", "groups", "groups_1", "groups_2", "total")
+      if (!level %in% available_levels || is.null(result[[level]])) {
+        level <- if ("grid" %in% names(result)) "grid" else "mesh"
       }
       result[[level]]
     })
@@ -921,11 +965,11 @@ analysis_server <- function(id) {
       result <- analysis_result()
       shiny::req(result)
       group_count <- 1L
-      group_column <- result$group_column
-      if (!is.null(result$groups) && !is.null(group_column) &&
-          length(group_column) == 1L && nzchar(group_column) &&
-          group_column %in% names(result$groups)) {
-        group_count <- length(unique(result$groups[[group_column]]))
+      group_columns <- normalize_group_columns(result$group_column %||% character(), max_columns = 2L)
+      if (!is.null(result$groups) && length(group_columns) &&
+          all(group_columns %in% names(result$groups))) {
+        group_table <- unique(sf::st_drop_geometry(result$groups)[group_columns])
+        group_count <- nrow(group_table)
       }
       year_min <- if (!is.null(result$raster_index$year) && length(result$raster_index$year)) {
         min(result$raster_index$year, na.rm = TRUE)
@@ -997,12 +1041,7 @@ analysis_server <- function(id) {
       },
       content = function(file) {
         result <- analysis_result()
-        zip_path <- result$files[["result_zip"]] %||% NA_character_
-        if (!is.na(zip_path) && file.exists(zip_path)) {
-          file.copy(zip_path, file, overwrite = TRUE)
-        } else {
-          prepare_result_download_zip(result, file)
-        }
+        prepare_result_download_zip(result, file)
       }
     )
 

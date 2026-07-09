@@ -26,6 +26,22 @@ body {
   margin-right: clamp(2rem, 8vw, 8rem);
 }
 
+.testing-notice {
+  margin: 0.8rem clamp(1rem, 3vw, 2.5rem) 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid rgba(211, 155, 42, 0.28);
+  border-radius: 0.65rem;
+  background: rgba(211, 155, 42, 0.1);
+  color: #5f4a19;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.testing-notice a {
+  color: var(--ls-accent);
+  font-weight: 700;
+}
+
 .brand-lockup {
   display: flex;
   align-items: center;
