@@ -784,10 +784,12 @@ analysis_server <- function(id) {
       map <- map |>
         leaflet::addPolygons(
           data = geo,
-          fill = FALSE,
-          color = "#00E5FF",
-          weight = 3,
-          opacity = 1,
+          fill = TRUE,
+          fillColor = "#000000",
+          fillOpacity = 0.3,
+          color = "transparent",
+          weight = 0,
+          opacity = 0,
           group = "Prévia do limite"
         )
       if (!is.null(mesh)) {
