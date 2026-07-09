@@ -481,7 +481,7 @@ analysis_server <- function(id) {
       geo_data(geo)
       geo_invalid_geometry(FALSE)
       columns <- result$columns %||% names(sf::st_drop_geometry(geo))
-      selected_group_columns <- intersect(input$group_column %||% character(), columns)
+      selected_group_columns <- intersect(shiny::isolate(input$group_column) %||% character(), columns)
       mesh_recommendation <- result$mesh_recommendation
       update_mesh_recommendation_inputs(mesh_recommendation)
       shiny::updateSelectizeInput(
@@ -498,7 +498,7 @@ analysis_server <- function(id) {
       )
       geo_validation_state(list(status = "complete", type = "success", text = message))
       validation_state(list(type = "success", text = message))
-      if (!isTRUE(running())) toggle_run_button(FALSE)
+      if (!isTRUE(shiny::isolate(running()))) toggle_run_button(FALSE)
       invisible(result)
     }
 
@@ -562,7 +562,8 @@ analysis_server <- function(id) {
       invisible(process)
     }
 
-    load_geospatial_file <- function(path, source_label = NULL, token = geo_validation_token()) {
+    load_geospatial_file <- function(path, source_label = NULL, token = NULL) {
+      token <- token %||% shiny::isolate(geo_validation_token())
       geo_path(path)
       geo_data(NULL)
       geo_invalid_geometry(FALSE)
@@ -576,7 +577,7 @@ analysis_server <- function(id) {
       } else {
         names(sf::st_drop_geometry(preview))
       }
-      selected_group_columns <- intersect(input$group_column %||% character(), columns)
+      selected_group_columns <- intersect(shiny::isolate(input$group_column) %||% character(), columns)
       mesh_recommendation <- recommend_mesh_size_km(
         preview,
         target_cells = 1000L,
@@ -675,7 +676,7 @@ analysis_server <- function(id) {
       upload_snapshot <- upload
       source_label <- paste(upload$name, collapse = ", ")
       later::later(function() {
-        if (!identical(token, geo_validation_token())) return(NULL)
+        if (!identical(token, shiny::isolate(geo_validation_token()))) return(NULL)
         tryCatch({
           set_geo_validation_progress(2, "Preparando arquivo", "Copiando arquivo para a sessão.")
           upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
@@ -691,7 +692,7 @@ analysis_server <- function(id) {
             geo_invalid_geometry(FALSE)
             geo_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
             validation_state(list(type = "danger", text = conditionMessage(e)))
-            if (!isTRUE(running())) toggle_run_button(TRUE)
+            if (!isTRUE(shiny::isolate(running()))) toggle_run_button(TRUE)
           }
         })
       }, delay = 0.05)
