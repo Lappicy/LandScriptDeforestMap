@@ -702,6 +702,56 @@ create.mesh <- function(
   mesh
 }
 
+create.preview.mesh <- function(
+  geo,
+  mesh.size,
+  max.cells = 20000L,
+  mesh.unit = c("meters", "degrees"),
+  output_crs = 4326
+) {
+  mesh.unit <- match.arg(mesh.unit)
+  if (!inherits(geo, "sf") || !nrow(geo)) {
+    stop("Prévia geoespacial inválida para criar a malha de visualização.", call. = FALSE)
+  }
+  if (!is.numeric(mesh.size) || length(mesh.size) != 1L ||
+      is.na(mesh.size) || !is.finite(mesh.size) || mesh.size <= 0) {
+    stop("O tamanho da malha deve ser um número positivo.", call. = FALSE)
+  }
+
+  bbox_geometry <- sf::st_as_sfc(sf::st_bbox(geo), crs = sf::st_crs(geo))
+  working_bbox <- if (identical(mesh.unit, "meters")) {
+    sf::st_transform(bbox_geometry, local_metric_crs(geo))
+  } else {
+    bbox_geometry
+  }
+
+  grid_geometry <- sf::st_make_grid(working_bbox, cellsize = mesh.size, square = TRUE)
+  if (length(grid_geometry) > max.cells) {
+    stop(
+      "A configuração produziria ",
+      format(length(grid_geometry), big.mark = ".", decimal.mark = ","),
+      " quadrículas na pré-visualização. Aumente o tamanho da malha.",
+      call. = FALSE
+    )
+  }
+
+  mesh <- sf::st_sf(
+    ID_mesh = seq_along(grid_geometry),
+    Grid_ID = seq_along(grid_geometry),
+    geometry = grid_geometry
+  )
+  if (identical(mesh.unit, "meters")) {
+    mesh <- sf::st_transform(mesh, output_crs)
+  } else if (!identical(sf::st_crs(mesh), sf::st_crs(output_crs))) {
+    mesh <- sf::st_transform(mesh, output_crs)
+  }
+
+  attr(mesh, "mesh_unit") <- mesh.unit
+  attr(mesh, "mesh_size") <- mesh.size
+  attr(mesh, "landscript_preview_mesh") <- TRUE
+  mesh
+}
+
 mesh_for_leaflet <- function(mesh, max_features = 20000L) {
   mesh <- drop_zm_geometry(mesh)
   if (nrow(mesh) <= max_features) return(mesh)

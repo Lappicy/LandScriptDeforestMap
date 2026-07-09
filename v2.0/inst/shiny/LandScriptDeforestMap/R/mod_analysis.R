@@ -730,27 +730,23 @@ analysis_server <- function(id) {
       geo <- geo_preview() %||% geo_data()
       shiny::req(geo)
       mesh_preview_notice(NULL)
-      if (!isTRUE(input$no_mesh)) {
-        size_km <- mesh_size_debounced()
-        shiny::validate(shiny::need(!is.null(size_km) && is.finite(size_km) && size_km > 0, "O tamanho da malha deve ser positivo."))
-        estimated_cells <- estimate_mesh_cells_km(geo, size_km)
-        preview_limit <- 20000L
-        if (is.finite(estimated_cells) && estimated_cells > preview_limit) {
-          mesh_preview_notice(paste0(
-            "Pré-visualização da malha omitida: esta configuração estima ",
-            format(round(estimated_cells), big.mark = ".", decimal.mark = ","),
-            " quadrículas. Aumente o tamanho da quadrícula para visualizar com mais fluidez."
-          ))
-          return(NULL)
-        }
-        size <- size_km * 1000
-      } else {
-        size <- NULL
+      if (isTRUE(input$no_mesh)) return(NULL)
+
+      size_km <- mesh_size_debounced()
+      shiny::validate(shiny::need(!is.null(size_km) && is.finite(size_km) && size_km > 0, "O tamanho da malha deve ser positivo."))
+      estimated_cells <- estimate_mesh_cells_km(geo, size_km)
+      preview_limit <- 20000L
+      if (is.finite(estimated_cells) && estimated_cells > preview_limit) {
+        mesh_preview_notice(paste0(
+          "Pré-visualização da malha omitida: esta configuração estima ",
+          format(round(estimated_cells), big.mark = ".", decimal.mark = ","),
+          " quadrículas. Aumente o tamanho da quadrícula para visualizar com mais fluidez."
+        ))
+        return(NULL)
       }
-      create.mesh(
+      create.preview.mesh(
         geo,
-        mesh.size = size,
-        group.column = ".ALL",
+        mesh.size = size_km * 1000,
         max.cells = 20000L,
         mesh.unit = "meters"
       )
@@ -775,18 +771,14 @@ analysis_server <- function(id) {
 
       if (is.null(geo)) return(map |> leaflet::setView(lng = -54, lat = -12, zoom = 4))
 
-      mesh <- if (!is.null(geo_data())) {
-        tryCatch(preview_mesh(), error = function(e) NULL)
-      } else {
-        NULL
-      }
+      mesh <- tryCatch(preview_mesh(), error = function(e) NULL)
       bbox <- sf::st_bbox(geo)
       map <- map |>
         leaflet::addPolygons(
           data = geo,
           fill = TRUE,
           fillColor = "#000000",
-          fillOpacity = 0.3,
+          fillOpacity = 0.6,
           color = "transparent",
           weight = 0,
           opacity = 0,
