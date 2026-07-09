@@ -7,7 +7,7 @@ analysis_ui <- function(id) {
       open = "desktop",
       bslib::accordion(
         id = ns("steps"),
-        open = c("step_geo", "step_mesh"),
+        open = FALSE,
         bslib::accordion_panel(
           "1. Arquivo geoespacial",
           value = "step_geo",
@@ -26,6 +26,7 @@ analysis_ui <- function(id) {
               placeholder = "Inserir o arquivo .gpkg, .shp, .zip, ou .json"
             ),
           ),
+          shiny::uiOutput(ns("geo_validation_message")),
           shiny::selectizeInput(
             ns("group_column"),
             "Colunas de limites/grupos (até 2)",
@@ -75,20 +76,26 @@ analysis_ui <- function(id) {
           shiny::uiOutput(ns("raster_folder_display")),
           shiny::selectInput(
             ns("mapbiomas"),
-            "Legenda MAPBIOMAS",
-            choices = c("Coleção 4" = "4", "Coleção 7.1" = "7.1", "Coleção 8" = "8", "Coleção 10" = "10", "Personalizada" = "custom"),
-            selected = "10"
+            "Legenda das classes",
+            choices = c(
+              "Personalizar" = "custom",
+              "MapBiomas - Coleção 4" = "4",
+              "MapBiomas - Coleção 7.1" = "7.1",
+              "MapBiomas - Coleção 8" = "8",
+              "MapBiomas - Coleção 10" = "10"
+            ),
+            selected = "custom"
           ),
           shiny::conditionalPanel(
             condition = sprintf("input['%s'] === 'custom'", ns("mapbiomas")),
-            shiny::textInput(ns("class_forest"), "Floresta", "1, 3"),
+            shiny::textInput(ns("class_forest"), "Floresta", ""),
             shiny::textInput(ns("class_nonforest"), "Não floresta", ""),
-            shiny::textInput(ns("class_water"), "Água", "26, 31, 33"),
-            shiny::textInput(ns("class_others"), "Outros", "0, 27"),
+            shiny::textInput(ns("class_water"), "Água", ""),
+            shiny::textInput(ns("class_others"), "Outros", ""),
             shiny::textInput(ns("class_agriculture"), "Agricultura", ""),
-            shiny::textInput(ns("class_pasture"), "Pastagem", "15"),
-            shiny::textInput(ns("class_mining"), "Mineração", "30"),
-            shiny::textInput(ns("class_urban"), "Urbano", "24"),
+            shiny::textInput(ns("class_pasture"), "Pastagem", ""),
+            shiny::textInput(ns("class_mining"), "Mineração", ""),
+            shiny::textInput(ns("class_urban"), "Urbano", ""),
             shiny::div(
               class = "custom-classes-extra",
               shiny::tags$hr(),
@@ -184,9 +191,11 @@ analysis_server <- function(id) {
 
     geo_path <- shiny::reactiveVal(NULL)
     geo_data <- shiny::reactiveVal(NULL)
+    geo_preview <- shiny::reactiveVal(NULL)
     geo_invalid_geometry <- shiny::reactiveVal(FALSE)
     analysis_result <- shiny::reactiveVal(NULL)
     validation_state <- shiny::reactiveVal(NULL)
+    geo_validation_state <- shiny::reactiveVal(NULL)
     raster_validation_state <- shiny::reactiveVal(NULL)
     pixel_area_value <- shiny::reactiveVal(NULL)
     pixel_area_summary <- shiny::reactiveVal("—")
@@ -197,6 +206,11 @@ analysis_server <- function(id) {
     raster_validation_progress_file <- shiny::reactiveVal(NULL)
     raster_validation_result_file <- shiny::reactiveVal(NULL)
     raster_validation_job_token <- shiny::reactiveVal(NULL)
+    geo_validation_token <- shiny::reactiveVal(0L)
+    geo_validation_process <- shiny::reactiveVal(NULL)
+    geo_validation_progress_file <- shiny::reactiveVal(NULL)
+    geo_validation_result_file <- shiny::reactiveVal(NULL)
+    geo_validation_job_token <- shiny::reactiveVal(NULL)
     running <- shiny::reactiveVal(FALSE)
     job_process <- shiny::reactiveVal(NULL)
     job_progress_file <- shiny::reactiveVal(NULL)
@@ -216,6 +230,17 @@ analysis_server <- function(id) {
       invisible(NULL)
     }
 
+    set_geo_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
+      geo_validation_state(list(
+        status = status,
+        percent = max(0, min(100, as.numeric(percent))),
+        stage = as.character(stage),
+        detail = as.character(detail %||% "")
+      ))
+      try(get("flushReact", asNamespace("shiny"))(), silent = TRUE)
+      invisible(NULL)
+    }
+
     toggle_run_button <- function(disabled) {
       session$sendCustomMessage(
         "toggle-disabled",
@@ -223,11 +248,25 @@ analysis_server <- function(id) {
       )
     }
 
-    mark_invalid_geospatial_file <- function() {
-      geo_path(NULL)
+    geospatial_validation_running <- function() {
+      process <- geo_validation_process()
+      !is.null(process) && process$is_alive()
+    }
+
+    geospatial_ready <- function() {
+      !geospatial_validation_running() &&
+        !is.null(geo_data()) &&
+        !isTRUE(geo_invalid_geometry())
+    }
+
+    mark_invalid_geospatial_file <- function(clear_preview = TRUE) {
+      if (isTRUE(clear_preview)) {
+        geo_path(NULL)
+        geo_preview(NULL)
+        shiny::updateSelectizeInput(session, "group_column", choices = NULL, selected = character(), server = TRUE)
+      }
       geo_data(NULL)
       geo_invalid_geometry(TRUE)
-      shiny::updateSelectizeInput(session, "group_column", choices = NULL, selected = character(), server = TRUE)
       validation_state(list(type = "danger", text = invalid_geometry_message()))
       toggle_run_button(TRUE)
       invisible(NULL)
@@ -387,19 +426,22 @@ analysis_server <- function(id) {
       invisible(process)
     }
 
-    load_geospatial_file <- function(path, source_label = NULL) {
-      validate_shapefile_geometry(path)
-      geo <- read_geo(path)
-      geo_path(path)
-      geo_data(geo)
-      geo_invalid_geometry(FALSE)
-      columns <- names(sf::st_drop_geometry(geo))
-      selected_group_columns <- character()
-      mesh_recommendation <- recommend_mesh_size_km(
-        geo,
-        target_cells = 1000L,
-        max_cells = 20000L
-      )
+    stop_geospatial_validation_process <- function() {
+      process <- shiny::isolate(geo_validation_process())
+      if (!is.null(process) && process$is_alive()) {
+        try(process$kill(), silent = TRUE)
+      }
+      geo_validation_process(NULL)
+      geo_validation_progress_file(NULL)
+      geo_validation_result_file(NULL)
+      geo_validation_job_token(NULL)
+      invisible(NULL)
+    }
+
+    update_mesh_recommendation_inputs <- function(mesh_recommendation) {
+      if (is.null(mesh_recommendation) || !is.finite(mesh_recommendation$size_km)) {
+        return(invisible(NULL))
+      }
       shiny::updateNumericInput(
         session,
         "mesh_size_km",
@@ -412,13 +454,11 @@ analysis_server <- function(id) {
         max = max(100, mesh_recommendation$size_km),
         value = mesh_recommendation$size_km
       )
-      shiny::updateSelectizeInput(
-        session,
-        "group_column",
-        choices = stats::setNames(columns, columns),
-        selected = selected_group_columns,
-        server = TRUE
-      )
+      invisible(mesh_recommendation)
+    }
+
+    mesh_recommendation_message <- function(mesh_recommendation) {
+      if (is.null(mesh_recommendation) || !isTRUE(mesh_recommendation$adjusted)) return("")
       estimated_mesh_text <- if (is.finite(mesh_recommendation$estimated_cells)) {
         paste0(
           " (aprox. ",
@@ -428,26 +468,139 @@ analysis_server <- function(id) {
       } else {
         "."
       }
-      mesh_message <- if (isTRUE(mesh_recommendation$adjusted)) {
-        paste0(
-          " Malha inicial sugerida automaticamente: ",
-          format(mesh_recommendation$size_km, big.mark = ".", decimal.mark = ","),
-          " km",
-          estimated_mesh_text
-        )
-      } else {
-        ""
-      }
+      paste0(
+        " Malha inicial sugerida automaticamente: ",
+        format(mesh_recommendation$size_km, big.mark = ".", decimal.mark = ","),
+        " km",
+        estimated_mesh_text
+      )
+    }
+
+    apply_geospatial_validation <- function(result, source_label = NULL) {
+      geo <- result$geo
+      geo_data(geo)
+      geo_invalid_geometry(FALSE)
+      columns <- result$columns %||% names(sf::st_drop_geometry(geo))
+      selected_group_columns <- intersect(input$group_column %||% character(), columns)
+      mesh_recommendation <- result$mesh_recommendation
+      update_mesh_recommendation_inputs(mesh_recommendation)
+      shiny::updateSelectizeInput(
+        session,
+        "group_column",
+        choices = stats::setNames(columns, columns),
+        selected = selected_group_columns,
+        server = TRUE
+      )
+      message <- paste0(
+        "Arquivo geoespacial validado e pronto para análise",
+        if (!is.null(source_label) && nzchar(source_label)) paste0(": ", source_label) else "",
+        ".",
+        mesh_recommendation_message(mesh_recommendation)
+      )
+      geo_validation_state(list(status = "complete", type = "success", text = message))
+      validation_state(list(type = "success", text = message))
+      if (!isTRUE(running())) toggle_run_button(FALSE)
+      invisible(result)
+    }
+
+    schedule_geospatial_validation <- function(path, source_label, token) {
+      stop_geospatial_validation_process()
+
+      progress_file <- file.path(session_dir, paste0("geo_validation_", token, ".json"))
+      result_file <- file.path(session_dir, paste0("geo_validation_", token, ".rds"))
+      safe_unlink(c(progress_file, result_file))
+      write_progress(progress_file, 20, "Prévia pronta", "Validando geometria em segundo plano.", "running")
+
+      process <- callr::r_bg(
+        func = function(path, source_label, progress_file, result_file, app_directory) {
+          source(file.path(app_directory, "R", "utils.R"), local = globalenv())
+          source(file.path(app_directory, "R", "spatial_io.R"), local = globalenv())
+
+          progress <- function(percent, stage, detail = NULL, status = "running") {
+            write_progress(progress_file, percent, stage, detail, status)
+          }
+
+          tryCatch({
+            geo <- read_geo(path, progress = progress)
+            progress(88, "Estimativa da malha", "Calculando sugestão pela extensão do arquivo.")
+            mesh_recommendation <- recommend_mesh_size_km(
+              geo,
+              target_cells = 1000L,
+              max_cells = 20000L
+            )
+            progress(94, "Resumo do arquivo", "Preparando atributos e resumo geoespacial.")
+            saveRDS(
+              list(
+                geo = geo,
+                columns = names(sf::st_drop_geometry(geo)),
+                mesh_recommendation = mesh_recommendation,
+                source_label = source_label
+              ),
+              result_file
+            )
+            progress(100, "Validação concluída", "Arquivo pronto para análise.", "complete")
+          }, error = function(e) {
+            write_progress(progress_file, 100, "Erro", conditionMessage(e), "error")
+            stop(e)
+          })
+        },
+        args = list(
+          path = path,
+          source_label = source_label,
+          progress_file = progress_file,
+          result_file = result_file,
+          app_directory = app_root()
+        ),
+        supervise = TRUE,
+        stdout = "|",
+        stderr = "|"
+      )
+
+      geo_validation_process(process)
+      geo_validation_progress_file(progress_file)
+      geo_validation_result_file(result_file)
+      geo_validation_job_token(token)
+      invisible(process)
+    }
+
+    load_geospatial_file <- function(path, source_label = NULL, token = geo_validation_token()) {
+      geo_path(path)
+      geo_data(NULL)
+      geo_invalid_geometry(FALSE)
+      toggle_run_button(TRUE)
+      set_geo_validation_progress(3, "Leitura do arquivo", "Abrindo prévia rápida para o mapa.")
+      preview <- read_geo_preview(path, simplify_tolerance_m = 250)
+      geo_preview(preview)
+      columns <- names(sf::st_drop_geometry(preview))
+      selected_group_columns <- intersect(input$group_column %||% character(), columns)
+      mesh_recommendation <- recommend_mesh_size_km(
+        preview,
+        target_cells = 1000L,
+        max_cells = 20000L
+      )
+      update_mesh_recommendation_inputs(mesh_recommendation)
+      shiny::updateSelectizeInput(
+        session,
+        "group_column",
+        choices = stats::setNames(columns, columns),
+        selected = selected_group_columns,
+        server = TRUE
+      )
+      set_geo_validation_progress(
+        20,
+        "Prévia pronta",
+        "Mapa liberado; validação completa em segundo plano."
+      )
       validation_state(list(
-        type = "success",
+        type = "info",
         text = paste0(
-          "Arquivo geoespacial carregado com sucesso",
+          "Prévia do arquivo geoespacial carregada",
           if (!is.null(source_label) && nzchar(source_label)) paste0(": ", source_label) else "",
-          ".",
-          mesh_message
+          ". Aguarde a validação completa para rodar a análise.",
+          mesh_recommendation_message(mesh_recommendation)
         )
       ))
-      if (!isTRUE(running())) toggle_run_button(FALSE)
+      schedule_geospatial_validation(path, source_label, token)
     }
 
     shiny::observeEvent(input$raster_upload, {
@@ -501,18 +654,30 @@ analysis_server <- function(id) {
       tryCatch({
         upload <- input$geo_upload
         if (is.null(upload) || !nrow(upload)) return(NULL)
+        token <- geo_validation_token() + 1L
+        geo_validation_token(token)
+        stop_geospatial_validation_process()
+        geo_path(NULL)
+        geo_data(NULL)
+        geo_preview(NULL)
+        geo_invalid_geometry(FALSE)
+        validation_state(NULL)
+        set_geo_validation_progress(1, "Recebendo arquivo", "Preparando arquivo enviado.")
+        toggle_run_button(TRUE)
         upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
         path <- stage_uploaded_vector(upload, upload_dir)
-        load_geospatial_file(path, paste(upload$name, collapse = ", "))
+        load_geospatial_file(path, paste(upload$name, collapse = ", "), token)
       }, error = function(e) {
         if (identical(conditionMessage(e), invalid_geometry_message())) {
           mark_invalid_geospatial_file()
         } else {
           geo_path(NULL)
           geo_data(NULL)
+          geo_preview(NULL)
           geo_invalid_geometry(FALSE)
+          geo_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
           validation_state(list(type = "danger", text = conditionMessage(e)))
-          if (!isTRUE(running())) toggle_run_button(FALSE)
+          if (!isTRUE(running())) toggle_run_button(TRUE)
         }
       })
     }, ignoreInit = TRUE)
@@ -582,7 +747,7 @@ analysis_server <- function(id) {
     })
 
     output$preview_map <- leaflet::renderLeaflet({
-      geo <- geo_data()
+      geo <- geo_preview() %||% geo_data()
       map <- leaflet::leaflet(options = leaflet::leafletOptions(preferCanvas = TRUE)) |>
         leaflet::addProviderTiles(
           leaflet::providers$Esri.WorldImagery,
@@ -594,7 +759,11 @@ analysis_server <- function(id) {
 
       if (is.null(geo)) return(map |> leaflet::setView(lng = -54, lat = -12, zoom = 4))
 
-      mesh <- tryCatch(preview_mesh(), error = function(e) NULL)
+      mesh <- if (!is.null(geo_data())) {
+        tryCatch(preview_mesh(), error = function(e) NULL)
+      } else {
+        NULL
+      }
       bbox <- sf::st_bbox(geo)
       map <- map |>
         leaflet::addPolygons(
@@ -603,7 +772,7 @@ analysis_server <- function(id) {
           color = "#00E5FF",
           weight = 3,
           opacity = 1,
-          group = "Limite original"
+          group = "Prévia do limite"
         )
       if (!is.null(mesh)) {
         preview <- mesh_for_leaflet(mesh)
@@ -621,16 +790,17 @@ analysis_server <- function(id) {
       map |>
         leaflet::addLayersControl(
           baseGroups = c("Satélite (Esri)", "Ruas"),
-          overlayGroups = c("Limite original", "Malha"),
+          overlayGroups = c("Prévia do limite", "Malha"),
           options = leaflet::layersControlOptions(collapsed = TRUE)
         ) |>
         leaflet::fitBounds(bbox[["xmin"]], bbox[["ymin"]], bbox[["xmax"]], bbox[["ymax"]])
     })
 
     output$geo_summary <- shiny::renderTable({
-      shiny::req(geo_data())
+      geo <- geo_data() %||% geo_preview()
+      shiny::req(geo)
       rbind(
-        geo_summary(geo_data()),
+        geo_summary(geo),
         data.frame(
           item = "Área do pixel estimada",
           value = pixel_area_summary(),
@@ -640,9 +810,10 @@ analysis_server <- function(id) {
     }, striped = TRUE, bordered = FALSE, spacing = "s")
 
     output$attribute_table <- DT::renderDT({
-      shiny::req(geo_data())
+      geo <- geo_data() %||% geo_preview()
+      shiny::req(geo)
       DT::datatable(
-        utils::head(sf::st_drop_geometry(geo_data()), 200),
+        utils::head(sf::st_drop_geometry(geo), 200),
         rownames = FALSE,
         filter = "top",
         options = list(scrollX = TRUE, pageLength = 10)
@@ -706,6 +877,49 @@ analysis_server <- function(id) {
     }
 
     shiny::observe({
+      process <- geo_validation_process()
+      if (is.null(process)) return()
+      shiny::invalidateLater(350, session)
+
+      token <- geo_validation_job_token()
+      if (!identical(token, shiny::isolate(geo_validation_token()))) return()
+
+      progress_file <- geo_validation_progress_file()
+      result_file <- geo_validation_result_file()
+      if (!is.null(progress_file) && file.exists(progress_file)) {
+        progress <- read_progress(progress_file)
+        geo_validation_state(list(
+          status = progress$status %||% "running",
+          percent = progress$percent %||% 0,
+          stage = progress$stage %||% "Validando geometria",
+          detail = progress$detail %||% ""
+        ))
+      }
+
+      if (!process$is_alive()) {
+        exit_status <- process$get_exit_status()
+        geo_validation_process(NULL)
+        geo_validation_progress_file(NULL)
+        geo_validation_result_file(NULL)
+        geo_validation_job_token(NULL)
+
+        if (identical(exit_status, 0L) && !is.null(result_file) && file.exists(result_file)) {
+          result <- readRDS(result_file)
+          apply_geospatial_validation(result, result$source_label %||% NULL)
+        } else {
+          error_lines <- c(process$read_error_lines(), process$read_output_lines())
+          progress <- if (!is.null(progress_file)) read_progress(progress_file) else list()
+          detail <- progress$detail %||% utils::tail(error_lines[nzchar(error_lines)], 1L) %||% "Falha desconhecida ao validar a geometria."
+          geo_data(NULL)
+          geo_invalid_geometry(TRUE)
+          geo_validation_state(list(status = "error", type = "danger", text = detail))
+          validation_state(list(type = "danger", text = detail))
+          toggle_run_button(TRUE)
+        }
+      }
+    })
+
+    shiny::observe({
       process <- raster_validation_process()
       if (is.null(process)) return()
       shiny::invalidateLater(350, session)
@@ -737,7 +951,7 @@ analysis_server <- function(id) {
           raster_folder_path(result$staged_folder)
           raster_folder_label(result$label)
           apply_raster_inspection(result$inspection)
-          if (!isTRUE(running()) && !isTRUE(geo_invalid_geometry())) toggle_run_button(FALSE)
+          if (!isTRUE(running()) && isTRUE(geospatial_ready())) toggle_run_button(FALSE)
         } else {
           error_lines <- c(process$read_error_lines(), process$read_output_lines())
           progress <- if (!is.null(progress_file)) read_progress(progress_file) else list()
@@ -747,7 +961,7 @@ analysis_server <- function(id) {
           pixel_area_value(NULL)
           pixel_area_summary("—")
           raster_validation_state(list(status = "error", type = "danger", text = detail))
-          if (!isTRUE(running()) && !isTRUE(geo_invalid_geometry())) toggle_run_button(FALSE)
+          if (!isTRUE(running()) && isTRUE(geospatial_ready())) toggle_run_button(FALSE)
         }
       }
     })
@@ -765,6 +979,9 @@ analysis_server <- function(id) {
         validation_state(list(type = "danger", text = invalid_geometry_message()))
         toggle_run_button(TRUE)
         stop(invalid_geometry_message(), call. = FALSE)
+      }
+      if (isTRUE(geospatial_validation_running())) {
+        stop("Aguarde a validação do arquivo geoespacial terminar antes de rodar o algoritmo.", call. = FALSE)
       }
       raster_process <- raster_validation_process()
       if (!is.null(raster_process) && raster_process$is_alive()) {
@@ -790,8 +1007,7 @@ analysis_server <- function(id) {
       list(rasters = rasters, output_folder = output_folder, resume_proxy = FALSE)
     }
 
-    output$raster_validation_message <- shiny::renderUI({
-      message <- raster_validation_state()
+    progress_status_ui <- function(message, default_stage, container_class) {
       if (is.null(message)) return(NULL)
       if (!is.null(message$percent) && is.null(message$text)) {
         percent <- max(0, min(100, as.numeric(message$percent %||% 0)))
@@ -799,10 +1015,10 @@ analysis_server <- function(id) {
           if (identical(message$status, "complete")) "success" else "primary"
         }
         return(shiny::div(
-          class = "raster-validation-result",
+          class = container_class,
           shiny::div(
             class = "progress-status raster-progress-status",
-            shiny::strong(message$stage %||% "Validando rasters"),
+            shiny::strong(message$stage %||% default_stage),
             shiny::tags$small(class = "text-muted", message$detail %||% "")
           ),
           shiny::div(
@@ -820,8 +1036,24 @@ analysis_server <- function(id) {
         ))
       }
       shiny::div(
-        class = "raster-validation-result",
+        class = container_class,
         app_alert(message$text, color = message$type, dismissible = TRUE)
+      )
+    }
+
+    output$geo_validation_message <- shiny::renderUI({
+      progress_status_ui(
+        geo_validation_state(),
+        "Validando geometria",
+        "geo-validation-result"
+      )
+    })
+
+    output$raster_validation_message <- shiny::renderUI({
+      progress_status_ui(
+        raster_validation_state(),
+        "Validando rasters",
+        "raster-validation-result"
       )
     })
 
@@ -1046,6 +1278,8 @@ analysis_server <- function(id) {
     )
 
     session$onSessionEnded(function() {
+      geo_process <- shiny::isolate(geo_validation_process())
+      if (!is.null(geo_process) && geo_process$is_alive()) geo_process$kill()
       raster_process <- shiny::isolate(raster_validation_process())
       if (!is.null(raster_process) && raster_process$is_alive()) raster_process$kill()
       process <- shiny::isolate(job_process())

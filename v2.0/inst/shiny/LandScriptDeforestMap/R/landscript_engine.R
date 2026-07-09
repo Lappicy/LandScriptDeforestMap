@@ -527,7 +527,8 @@ run_land_analysis <- function(params, progress_file = NULL) {
       mesh.size = if (isTRUE(params$no_mesh)) NULL else params$mesh_size,
       group.column = group_columns,
       max.cells = params$max_cells %||% 50000L,
-      mesh.unit = params$mesh_unit %||% "degrees"
+      mesh.unit = params$mesh_unit %||% "degrees",
+      prepared.boundaries = TRUE
     )
     for (column in group_columns) {
       mesh[[column]] <- factor(mesh[[column]])

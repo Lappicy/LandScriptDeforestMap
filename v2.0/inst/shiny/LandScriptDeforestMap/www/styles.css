@@ -239,6 +239,7 @@ body {
   display: none;
 }
 
+.geo-validation-result,
 .raster-validation-result {
   margin-top: 0.8rem;
 }

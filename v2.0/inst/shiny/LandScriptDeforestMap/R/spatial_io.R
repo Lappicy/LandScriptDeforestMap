@@ -45,6 +45,13 @@ invalid_geometry_message <- function() {
   "arquivo com geometria inválida, favor corrigir ele e tentar novamente"
 }
 
+geo_progress <- function(progress, percent, stage, detail = NULL, status = "running") {
+  if (is.function(progress)) {
+    progress(percent, stage, detail, status)
+  }
+  invisible(NULL)
+}
+
 validate_shapefile_geometry <- function(file_name) {
   if (is.null(file_name) || !length(file_name) || !file.exists(file_name[[1]])) {
     return(invisible(TRUE))
@@ -67,7 +74,103 @@ validate_shapefile_geometry <- function(file_name) {
   invisible(TRUE)
 }
 
-read_geo <- function(file_name, projection_wanted = 4326, layer = NULL) {
+read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress = NULL) {
+  geo_progress(progress, 5, "Leitura do arquivo", "Abrindo arquivo geoespacial.")
+  if (inherits(file_name, "sf")) {
+    geo <- file_name
+    if (isTRUE(attr(geo, "landscript_validated"))) {
+      if (!is.na(sf::st_crs(geo)) && !identical(sf::st_crs(geo), sf::st_crs(projection_wanted))) {
+        geo <- suppressWarnings(sf::st_transform(geo, projection_wanted))
+      }
+      geo <- drop_zm_geometry(geo)
+      sf::st_geometry(geo) <- "geometry"
+      attr(geo, "landscript_validated") <- TRUE
+      geo_progress(progress, 84, "Arquivo preparado", "Geometria validada.")
+      return(geo)
+    }
+  } else {
+    if (!file.exists(file_name)) stop("Arquivo geoespacial não encontrado.", call. = FALSE)
+    geo <- if (is.null(layer) || !nzchar(layer)) {
+      sf::st_read(file_name, quiet = TRUE, stringsAsFactors = FALSE)
+    } else {
+      sf::st_read(file_name, layer = layer, quiet = TRUE, stringsAsFactors = FALSE)
+    }
+  }
+
+  if (!inherits(geo, "sf") || !nrow(geo)) {
+    stop("O arquivo geoespacial não contém feições.", call. = FALSE)
+  }
+  geo_progress(progress, 18, "Leitura do arquivo", "Removendo dimensões Z/M e conferindo CRS.")
+  geo <- drop_zm_geometry(geo)
+  if (is.na(sf::st_crs(geo))) {
+    stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
+  }
+
+  geo_progress(progress, 34, "Verificação da geometria", "Checando se as feições são válidas.")
+  valid_geometry <- suppressWarnings(sf::st_is_valid(geo))
+  if (any(!valid_geometry | is.na(valid_geometry))) {
+    geo_progress(progress, 48, "Correção da geometria", "Corrigindo geometrias inválidas.")
+    geo <- suppressWarnings(sf::st_make_valid(geo))
+  }
+  geo_progress(progress, 62, "Verificação da geometria", "Removendo geometrias vazias e conferindo tipo.")
+  empty <- sf::st_is_empty(geo)
+  if (any(empty)) geo <- geo[!empty, , drop = FALSE]
+  if (!nrow(geo)) stop("Todas as geometrias do arquivo estão vazias.", call. = FALSE)
+
+  geometry_types <- unique(as.character(sf::st_geometry_type(geo, by_geometry = TRUE)))
+  if (!all(grepl("POLYGON", geometry_types))) {
+    stop(
+      "A análise requer geometrias poligonais. Tipos encontrados: ",
+      paste(geometry_types, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  geo <- suppressWarnings(sf::st_collection_extract(geo, "POLYGON"))
+  geo_progress(progress, 74, "Transformação do CRS", "Reprojetando para visualização e análise.")
+  geo <- sf::st_transform(geo, projection_wanted)
+  geo <- drop_zm_geometry(geo)
+  sf::st_geometry(geo) <- "geometry"
+  attr(geo, "landscript_validated") <- TRUE
+  geo_progress(progress, 84, "Arquivo preparado", "Geometria validada.")
+  geo
+}
+
+preview_simplify_tolerance_degrees <- function(geo, tolerance_m) {
+  tolerance_m <- suppressWarnings(as.numeric(tolerance_m %||% NA_real_))
+  if (!is.finite(tolerance_m) || tolerance_m <= 0) return(NA_real_)
+  degree_equivalent <- meters_to_degree_equivalent(tolerance_m, geo)
+  max(
+    abs(degree_equivalent$latitude_degrees),
+    abs(degree_equivalent$longitude_degrees),
+    na.rm = TRUE
+  )
+}
+
+simplify_geo_preview <- function(geo, tolerance_m = 250) {
+  if (!inherits(geo, "sf") || !nrow(geo)) return(geo)
+  tolerance_degrees <- preview_simplify_tolerance_degrees(geo, tolerance_m)
+  if (!is.finite(tolerance_degrees) || tolerance_degrees <= 0) return(geo)
+
+  simplified <- tryCatch(
+    suppressWarnings(sf::st_simplify(geo, dTolerance = tolerance_degrees, preserveTopology = FALSE)),
+    error = function(e) geo
+  )
+  simplified <- drop_zm_geometry(simplified)
+  empty <- tryCatch(sf::st_is_empty(simplified), error = function(e) rep(FALSE, nrow(simplified)))
+  if (any(empty)) simplified <- simplified[!empty, , drop = FALSE]
+  if (!nrow(simplified)) return(geo)
+  sf::st_geometry(simplified) <- "geometry"
+  attr(simplified, "preview_simplified_tolerance_m") <- tolerance_m
+  simplified
+}
+
+read_geo_preview <- function(
+  file_name,
+  projection_wanted = 4326,
+  layer = NULL,
+  simplify_tolerance_m = 250
+) {
   if (inherits(file_name, "sf")) {
     geo <- file_name
   } else {
@@ -86,29 +189,12 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL) {
   if (is.na(sf::st_crs(geo))) {
     stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
   }
-
-  valid_geometry <- suppressWarnings(sf::st_is_valid(geo))
-  if (any(!valid_geometry | is.na(valid_geometry))) {
-    geo <- suppressWarnings(sf::st_make_valid(geo))
+  if (!identical(sf::st_crs(geo), sf::st_crs(projection_wanted))) {
+    geo <- suppressWarnings(sf::st_transform(geo, projection_wanted))
   }
-  empty <- sf::st_is_empty(geo)
-  if (any(empty)) geo <- geo[!empty, , drop = FALSE]
-  if (!nrow(geo)) stop("Todas as geometrias do arquivo estão vazias.", call. = FALSE)
-
-  geometry_types <- unique(as.character(sf::st_geometry_type(geo, by_geometry = TRUE)))
-  if (!all(grepl("POLYGON", geometry_types))) {
-    stop(
-      "A análise requer geometrias poligonais. Tipos encontrados: ",
-      paste(geometry_types, collapse = ", "),
-      call. = FALSE
-    )
-  }
-
-  geo <- suppressWarnings(sf::st_collection_extract(geo, "POLYGON"))
-  geo <- sf::st_transform(geo, projection_wanted)
   geo <- drop_zm_geometry(geo)
   sf::st_geometry(geo) <- "geometry"
-  geo
+  simplify_geo_preview(geo, simplify_tolerance_m)
 }
 
 geo_summary <- function(geo) {
@@ -126,9 +212,22 @@ geo_summary <- function(geo) {
   )
 }
 
+bbox_wgs84 <- function(geo) {
+  crs <- sf::st_crs(geo)
+  bbox_geometry <- sf::st_as_sfc(sf::st_bbox(geo), crs = crs)
+  bbox_geometry <- if (!is.na(crs)) {
+    tryCatch(
+      suppressWarnings(sf::st_transform(bbox_geometry, 4326)),
+      error = function(e) bbox_geometry
+    )
+  } else {
+    bbox_geometry
+  }
+  sf::st_bbox(bbox_geometry)
+}
+
 local_metric_crs <- function(geo) {
-  geo_wgs84 <- sf::st_transform(geo, 4326)
-  bbox <- sf::st_bbox(geo_wgs84)
+  bbox <- bbox_wgs84(geo)
   longitude <- mean(c(as.numeric(bbox[["xmin"]]), as.numeric(bbox[["xmax"]])), na.rm = TRUE)
   latitude <- mean(c(as.numeric(bbox[["ymin"]]), as.numeric(bbox[["ymax"]])), na.rm = TRUE)
   if (!is.finite(longitude)) longitude <- 0
@@ -154,7 +253,7 @@ meters_to_degree_equivalent <- function(meters, geo = NULL) {
 
   latitude <- 0
   if (!is.null(geo) && inherits(geo, "sf") && nrow(geo)) {
-    bbox <- sf::st_bbox(sf::st_transform(geo, 4326))
+    bbox <- bbox_wgs84(geo)
     latitude <- mean(c(as.numeric(bbox[["ymin"]]), as.numeric(bbox[["ymax"]])), na.rm = TRUE)
     if (!is.finite(latitude)) latitude <- 0
   }
@@ -178,8 +277,11 @@ meters_to_degree_equivalent <- function(meters, geo = NULL) {
 }
 
 mesh_extent_dimensions_m <- function(geo) {
-  geo <- read_geo(geo)
-  metric_geo <- sf::st_transform(geo, local_metric_crs(geo))
+  if (!inherits(geo, "sf")) {
+    geo <- read_geo(geo)
+  }
+  bbox_geometry <- sf::st_as_sfc(sf::st_bbox(geo), crs = sf::st_crs(geo))
+  metric_geo <- sf::st_transform(bbox_geometry, local_metric_crs(geo))
   bbox <- sf::st_bbox(metric_geo)
   width <- as.numeric(bbox[["xmax"]] - bbox[["xmin"]])
   height <- as.numeric(bbox[["ymax"]] - bbox[["ymin"]])
@@ -382,6 +484,7 @@ prepare_group_boundaries <- function(geo, group_column = NULL) {
   sf::st_geometry(boundaries) <- "geometry"
   attr(boundaries, "group_column") <- group_columns
   attr(boundaries, "group_columns") <- group_columns
+  attr(boundaries, "landscript_validated") <- TRUE
   boundaries
 }
 
@@ -393,11 +496,30 @@ create.mesh <- function(
   mesh.format = "square",
   group.column = NULL,
   max.cells = 50000L,
-  mesh.unit = c("degrees", "meters")
+  mesh.unit = c("degrees", "meters"),
+  prepared.boundaries = FALSE
 ) {
   mesh.unit <- match.arg(mesh.unit)
-  boundaries <- prepare_group_boundaries(geo.file, group.column)
-  group.columns <- attr(boundaries, "group_columns") %||% attr(boundaries, "group_column")
+  if (isTRUE(prepared.boundaries)) {
+    if (!inherits(geo.file, "sf") || !nrow(geo.file)) {
+      stop("Limites preparados inválidos para criar a malha.", call. = FALSE)
+    }
+    boundaries <- geo.file
+    group.columns <- normalize_group_columns(group.column, max_columns = 2L)
+    if (!length(group.columns)) {
+      group.columns <- attr(boundaries, "group_columns") %||% attr(boundaries, "group_column")
+    }
+    if (is.null(group.columns) || !length(group.columns)) {
+      stop("Limites preparados sem coluna de grupo.", call. = FALSE)
+    }
+    missing_columns <- setdiff(group.columns, names(sf::st_drop_geometry(boundaries)))
+    if (length(missing_columns)) {
+      stop("Limites preparados sem coluna(s): ", paste(missing_columns, collapse = ", "), call. = FALSE)
+    }
+  } else {
+    boundaries <- prepare_group_boundaries(geo.file, group.column)
+    group.columns <- attr(boundaries, "group_columns") %||% attr(boundaries, "group_column")
+  }
 
   if (is.null(mesh.size)) {
     mesh <- boundaries
@@ -454,6 +576,7 @@ create.mesh <- function(
   attr(mesh, "overlap_removed") <- isTRUE(attr(boundaries, "overlap_removed"))
   attr(mesh, "mesh_unit") <- mesh.unit
   attr(mesh, "mesh_size") <- mesh.size
+  attr(mesh, "landscript_validated") <- TRUE
   mesh
 }
 
