@@ -242,6 +242,7 @@ body {
 .geo-validation-result,
 .raster-validation-result {
   margin-top: 0.8rem;
+  opacity: 1 !important;
 }
 
 .raster-progress-status {
@@ -250,6 +251,27 @@ body {
 
 .raster-progress {
   height: 1.1rem;
+  opacity: 1 !important;
+  background-color: rgba(23, 107, 91, 0.12) !important;
+}
+
+.geo-validation-result .progress-status,
+.raster-validation-result .progress-status {
+  color: var(--ls-ink);
+  opacity: 1 !important;
+}
+
+.geo-validation-result .text-muted,
+.raster-validation-result .text-muted {
+  color: var(--ls-muted) !important;
+  opacity: 1 !important;
+}
+
+.geo-validation-result .progress-bar,
+.raster-validation-result .progress-bar {
+  background-color: var(--ls-accent) !important;
+  color: #fff;
+  opacity: 1 !important;
 }
 
 .results-table-header {

@@ -165,12 +165,85 @@ simplify_geo_preview <- function(geo, tolerance_m = 250) {
   simplified
 }
 
+sql_quote_string <- function(x) {
+  paste0("'", gsub("'", "''", as.character(x)), "'")
+}
+
+geo_bbox_preview_from_values <- function(
+  xmin,
+  ymin,
+  xmax,
+  ymax,
+  crs,
+  projection_wanted = 4326
+) {
+  values <- c(xmin = xmin, ymin = ymin, xmax = xmax, ymax = ymax)
+  if (any(!is.finite(values))) return(NULL)
+  if (values[["xmin"]] >= values[["xmax"]] || values[["ymin"]] >= values[["ymax"]]) {
+    return(NULL)
+  }
+
+  geometry <- sf::st_as_sfc(sf::st_bbox(values, crs = crs))
+  preview <- sf::st_sf(
+    Preview = "Extensão do arquivo",
+    geometry = geometry
+  )
+  if (!is.na(sf::st_crs(preview)) && !identical(sf::st_crs(preview), sf::st_crs(projection_wanted))) {
+    preview <- suppressWarnings(sf::st_transform(preview, projection_wanted))
+  }
+  sf::st_geometry(preview) <- "geometry"
+  attr(preview, "landscript_preview_type") <- "bbox"
+  preview
+}
+
+read_gpkg_bbox_preview <- function(file_name, projection_wanted = 4326, layer = NULL) {
+  if (!identical(tolower(tools::file_ext(file_name)), "gpkg")) return(NULL)
+  layers <- tryCatch(sf::st_layers(file_name), error = function(e) NULL)
+  if (is.null(layers) || !nrow(layers)) return(NULL)
+  selected_layer <- layer
+  if (is.null(selected_layer) || !nzchar(selected_layer)) {
+    selected_layer <- layers$name[[1]]
+  }
+  if (!selected_layer %in% layers$name) return(NULL)
+
+  query <- paste0(
+    "SELECT min_x, min_y, max_x, max_y, srs_id FROM gpkg_contents WHERE table_name = ",
+    sql_quote_string(selected_layer),
+    " LIMIT 1"
+  )
+  bbox_data <- tryCatch(
+    sf::st_read(file_name, query = query, quiet = TRUE, stringsAsFactors = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(bbox_data) || !nrow(bbox_data)) return(NULL)
+  crs <- tryCatch(sf::st_crs(as.integer(bbox_data$srs_id[[1]])), error = function(e) NA)
+  if (is.na(crs)) crs <- layers$crs[[match(selected_layer, layers$name)]]
+
+  geo_bbox_preview_from_values(
+    xmin = as.numeric(bbox_data$min_x[[1]]),
+    ymin = as.numeric(bbox_data$min_y[[1]]),
+    xmax = as.numeric(bbox_data$max_x[[1]]),
+    ymax = as.numeric(bbox_data$max_y[[1]]),
+    crs = crs,
+    projection_wanted = projection_wanted
+  )
+}
+
 read_geo_preview <- function(
   file_name,
   projection_wanted = 4326,
   layer = NULL,
-  simplify_tolerance_m = 250
+  simplify_tolerance_m = 250,
+  bbox_threshold_mb = 25
 ) {
+  if (!inherits(file_name, "sf") && file.exists(file_name)) {
+    size_mb <- file.info(file_name)$size / 1024^2
+    if (is.finite(size_mb) && size_mb >= bbox_threshold_mb) {
+      bbox_preview <- read_gpkg_bbox_preview(file_name, projection_wanted = projection_wanted, layer = layer)
+      if (!is.null(bbox_preview)) return(bbox_preview)
+    }
+  }
+
   if (inherits(file_name, "sf")) {
     geo <- file_name
   } else {

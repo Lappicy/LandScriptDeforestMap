@@ -494,8 +494,7 @@ analysis_server <- function(id) {
       message <- paste0(
         "Arquivo geoespacial validado e pronto para análise",
         if (!is.null(source_label) && nzchar(source_label)) paste0(": ", source_label) else "",
-        ".",
-        mesh_recommendation_message(mesh_recommendation)
+        "."
       )
       geo_validation_state(list(status = "complete", type = "success", text = message))
       validation_state(list(type = "success", text = message))
@@ -571,7 +570,12 @@ analysis_server <- function(id) {
       set_geo_validation_progress(3, "Leitura do arquivo", "Abrindo prévia rápida para o mapa.")
       preview <- read_geo_preview(path, simplify_tolerance_m = 250)
       geo_preview(preview)
-      columns <- names(sf::st_drop_geometry(preview))
+      preview_is_bbox <- identical(attr(preview, "landscript_preview_type"), "bbox")
+      columns <- if (isTRUE(preview_is_bbox)) {
+        character()
+      } else {
+        names(sf::st_drop_geometry(preview))
+      }
       selected_group_columns <- intersect(input$group_column %||% character(), columns)
       mesh_recommendation <- recommend_mesh_size_km(
         preview,
@@ -589,7 +593,11 @@ analysis_server <- function(id) {
       set_geo_validation_progress(
         20,
         "Prévia pronta",
-        "Mapa liberado; validação completa em segundo plano."
+        if (isTRUE(preview_is_bbox)) {
+          "Mapa liberado pela extensão do arquivo; validação completa em segundo plano."
+        } else {
+          "Mapa liberado; validação completa em segundo plano."
+        }
       )
       validation_state(list(
         type = "info",
@@ -651,35 +659,42 @@ analysis_server <- function(id) {
     })
 
     shiny::observeEvent(input$geo_upload, {
-      tryCatch({
-        upload <- input$geo_upload
-        if (is.null(upload) || !nrow(upload)) return(NULL)
-        token <- geo_validation_token() + 1L
-        geo_validation_token(token)
-        stop_geospatial_validation_process()
-        geo_path(NULL)
-        geo_data(NULL)
-        geo_preview(NULL)
-        geo_invalid_geometry(FALSE)
-        validation_state(NULL)
-        set_geo_validation_progress(1, "Recebendo arquivo", "Preparando arquivo enviado.")
-        toggle_run_button(TRUE)
-        upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
-        path <- stage_uploaded_vector(upload, upload_dir)
-        load_geospatial_file(path, paste(upload$name, collapse = ", "), token)
-      }, error = function(e) {
-        if (identical(conditionMessage(e), invalid_geometry_message())) {
-          mark_invalid_geospatial_file()
-        } else {
-          geo_path(NULL)
-          geo_data(NULL)
-          geo_preview(NULL)
-          geo_invalid_geometry(FALSE)
-          geo_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
-          validation_state(list(type = "danger", text = conditionMessage(e)))
-          if (!isTRUE(running())) toggle_run_button(TRUE)
-        }
-      })
+      upload <- input$geo_upload
+      if (is.null(upload) || !nrow(upload)) return(NULL)
+      token <- geo_validation_token() + 1L
+      geo_validation_token(token)
+      stop_geospatial_validation_process()
+      geo_path(NULL)
+      geo_data(NULL)
+      geo_preview(NULL)
+      geo_invalid_geometry(FALSE)
+      validation_state(NULL)
+      set_geo_validation_progress(1, "Recebendo arquivo", "Preparando arquivo enviado.")
+      toggle_run_button(TRUE)
+
+      upload_snapshot <- upload
+      source_label <- paste(upload$name, collapse = ", ")
+      later::later(function() {
+        if (!identical(token, geo_validation_token())) return(NULL)
+        tryCatch({
+          set_geo_validation_progress(2, "Preparando arquivo", "Copiando arquivo para a sessão.")
+          upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
+          path <- stage_uploaded_vector(upload_snapshot, upload_dir)
+          load_geospatial_file(path, source_label, token)
+        }, error = function(e) {
+          if (identical(conditionMessage(e), invalid_geometry_message())) {
+            mark_invalid_geospatial_file()
+          } else {
+            geo_path(NULL)
+            geo_data(NULL)
+            geo_preview(NULL)
+            geo_invalid_geometry(FALSE)
+            geo_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
+            validation_state(list(type = "danger", text = conditionMessage(e)))
+            if (!isTRUE(running())) toggle_run_button(TRUE)
+          }
+        })
+      }, delay = 0.05)
     }, ignoreInit = TRUE)
 
     shiny::observeEvent(input$mesh_size_km, {
@@ -711,7 +726,7 @@ analysis_server <- function(id) {
     mesh_preview_notice <- shiny::reactiveVal(NULL)
 
     preview_mesh <- shiny::reactive({
-      geo <- geo_data()
+      geo <- geo_preview() %||% geo_data()
       shiny::req(geo)
       mesh_preview_notice(NULL)
       if (!isTRUE(input$no_mesh)) {
