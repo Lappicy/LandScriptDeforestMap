@@ -71,6 +71,51 @@ body {
   font-weight: 700;
 }
 
+.analysis-step-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.analysis-step-title .shiny-bound-output {
+  display: inline-flex;
+  align-items: center;
+}
+
+.step-complete-check {
+  display: inline-grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 999px;
+  background: #2c8c65;
+  color: #fff;
+  font-size: 0.72rem;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.accordion-button:has(.step-complete-check),
+.accordion-button:not(.collapsed):has(.step-complete-check) {
+  background: #dff2eb;
+  color: #0f5c4e;
+  box-shadow: inset 0 -1px 0 rgba(23, 107, 91, 0.12);
+}
+
+.analysis-preview-map-frame {
+  height: 553px;
+  max-height: 553px;
+  overflow: hidden;
+}
+
+.analysis-preview-map-frame .leaflet,
+.analysis-preview-map-frame .leaflet-container,
+.analysis-preview-map-frame .html-widget {
+  height: 553px !important;
+  max-height: 553px !important;
+}
+
 .card {
   border: 1px solid rgba(23, 107, 91, 0.1);
   box-shadow: 0 10px 30px rgba(26, 50, 44, 0.06);
@@ -84,6 +129,37 @@ body {
 .leaflet-container {
   border-radius: 0.4rem;
   background: #d9e3e0;
+}
+
+.preview-north-control {
+  margin: 0.7rem 0.7rem 0 0 !important;
+}
+
+.preview-north-arrow {
+  display: grid;
+  place-items: center;
+  min-width: 2.35rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 0.35rem 0.35rem;
+  border: 1px solid rgba(23, 107, 91, 0.22);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.86);
+  color: #10251f;
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.2);
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.preview-north-label {
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.preview-north-pointer {
+  margin-top: 0.1rem;
+  color: #10251f;
+  font-size: 1.15rem;
 }
 
 .geo-upload-dropzone,
@@ -215,6 +291,156 @@ body {
   margin-bottom: 0.55rem;
 }
 
+.step-section-divider {
+  margin: 1rem 0;
+  border-color: rgba(23, 107, 91, 0.16);
+  opacity: 1;
+}
+
+.output-folder-picker {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+}
+
+.output-folder-picker .shiny-input-container {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.output-folder-picker .shinyDirButton {
+  border-color: rgba(23, 107, 91, 0.35);
+  color: var(--ls-accent);
+  font-weight: 700;
+}
+
+.sF-modalContainer .modal-dialog {
+  width: min(94vw, 980px);
+  max-width: 980px;
+}
+
+.sF-modal .modal-content {
+  border: 0;
+  border-radius: 1rem;
+  box-shadow: 0 24px 80px rgba(16, 37, 31, 0.28);
+  overflow: hidden;
+}
+
+.sF-modal .modal-header {
+  align-items: center;
+  border-bottom: 1px solid rgba(23, 107, 91, 0.14);
+  background: linear-gradient(135deg, rgba(23, 107, 91, 0.12), rgba(223, 242, 235, 0.9));
+  color: #0f3f36;
+  padding: 1rem 1.25rem;
+}
+
+.sF-modal .modal-title,
+.sF-title {
+  font-weight: 800;
+}
+
+.sF-modal .modal-body {
+  background: #f6faf8;
+  padding: 1rem 1.15rem;
+}
+
+.sF-modal .modal-footer {
+  border-top: 1px solid rgba(23, 107, 91, 0.12);
+  background: #fff;
+  padding: 0.85rem 1.15rem;
+}
+
+.sF-navigation,
+.sF-modal .btn-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.sF-breadcrumps,
+#directory-modal .sF-breadcrumps {
+  width: auto;
+  min-width: min(100%, 18rem);
+  margin-left: 0;
+  border-color: rgba(23, 107, 91, 0.22);
+  border-radius: 0.5rem;
+}
+
+.sF-dirWindow {
+  min-height: 54vh;
+  gap: 0.75rem;
+}
+
+.sF-dirWindow > div,
+.sF-dirInfo > div {
+  border: 1px solid rgba(23, 107, 91, 0.16);
+  border-radius: 0.8rem;
+  background: #fff;
+}
+
+.sF-dirInfo > div {
+  height: 54vh;
+  padding: 0.45rem;
+}
+
+.sF-dirWindow h6 {
+  color: #34574f;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.sF-dirList .sF-directory > div {
+  font-size: 0.92rem;
+  padding-top: 0.16rem;
+  padding-bottom: 0.16rem;
+}
+
+.sF-dirContent > div > div {
+  font-size: 0.93rem;
+  padding-top: 0.18rem;
+  padding-bottom: 0.18rem;
+}
+
+.sF-dirList div.selected > .sF-file-name > div,
+.sF-fileList > div.selected .sF-file-name div {
+  color: #fff;
+  background: var(--ls-accent);
+  border-radius: 0.45rem;
+}
+
+.sF-dirList .sF-directory > div:not(.sF-content):hover .sF-file-name > div,
+.sF-dirContent > div:hover {
+  background: rgba(23, 107, 91, 0.08);
+  border-radius: 0.45rem;
+}
+
+.sF-modal .btn {
+  border-radius: 0.55rem;
+  font-weight: 700;
+}
+
+.sF-modal #sF-selectButton,
+.sF-modal .btn-primary {
+  border-color: var(--ls-accent);
+  background: var(--ls-accent);
+  color: #fff;
+}
+
+.sF-modal #sF-selectButton:hover,
+.sF-modal .btn-primary:hover {
+  border-color: #0f5c4e;
+  background: #0f5c4e;
+}
+
+.sF-modal #sF-cancelButton,
+.sF-modal .btn-default {
+  border-color: rgba(23, 107, 91, 0.22);
+  background: #fff;
+  color: #34574f;
+}
+
 .progress-status {
   display: grid;
   gap: 0.2rem;
@@ -340,6 +566,41 @@ body {
 
 .source-results-card .card-body {
   overflow: visible !important;
+}
+
+.source-results-card .bslib-grid {
+  align-items: start;
+}
+
+.source-results-card .shiny-input-container {
+  width: 100%;
+  margin-bottom: 0;
+  display: grid;
+  grid-template-rows: 2.2rem 2.55rem;
+  align-items: end;
+}
+
+.source-results-card .form-label,
+.source-results-card .control-label {
+  min-height: 0;
+  height: 2.2rem;
+  display: flex;
+  align-items: flex-end;
+  line-height: 1.2;
+  margin-bottom: 0.35rem;
+}
+
+.source-results-card .selectize-control,
+.source-results-card .form-select,
+.source-results-card .input-group {
+  margin-bottom: 0;
+  min-height: 2.55rem;
+}
+
+.source-results-card .selectize-input,
+.source-results-card .form-control,
+.source-results-card .form-select {
+  min-height: 2.55rem;
 }
 
 .source-header {

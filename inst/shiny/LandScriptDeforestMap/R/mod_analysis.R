@@ -1,5 +1,12 @@
 analysis_ui <- function(id) {
   ns <- shiny::NS(id)
+  step_title <- function(label, status_output_id) {
+    shiny::span(
+      class = "analysis-step-title",
+      shiny::span(label),
+      shiny::uiOutput(ns(status_output_id), inline = TRUE)
+    )
+  }
 
   bslib::layout_sidebar(
     sidebar = bslib::sidebar(
@@ -8,9 +15,10 @@ analysis_ui <- function(id) {
       bslib::accordion(
         id = ns("steps"),
         open = FALSE,
+        multiple = FALSE,
         bslib::accordion_panel(
-          "1. Arquivo geoespacial",
-          value = "step_geo",
+          step_title("1. Arquivo geoespacial e malha", "step_geo_mesh_status"),
+          value = "step_geo_mesh",
           shiny::div(
             class = "geo-upload-dropzone",
             shiny::fileInput(
@@ -36,11 +44,8 @@ analysis_ui <- function(id) {
               maxItems = 2,
               placeholder = "Nenhuma coluna = toda a área"
             )
-          )
-        ),
-        bslib::accordion_panel(
-          "2. Malha",
-          value = "step_mesh",
+          ),
+          shiny::tags$hr(class = "step-section-divider"),
           shiny::checkboxInput(ns("no_mesh"), "Não criar malha", FALSE),
           shiny::conditionalPanel(
             condition = sprintf("!input['%s']", ns("no_mesh")),
@@ -60,7 +65,7 @@ analysis_ui <- function(id) {
           )
         ),
         bslib::accordion_panel(
-          "3. Rasters e classes",
+          step_title("2. Rasters e classes", "step_rasters_status"),
           value = "step_rasters",
           shiny::div(
             class = "raster-upload-dropzone",
@@ -78,13 +83,14 @@ analysis_ui <- function(id) {
             ns("mapbiomas"),
             "Legenda das classes",
             choices = c(
+              "Sem legenda" = "none",
               "Personalizar" = "custom",
               "MapBiomas - Coleção 4" = "4",
               "MapBiomas - Coleção 7.1" = "7.1",
               "MapBiomas - Coleção 8" = "8",
               "MapBiomas - Coleção 10" = "10"
             ),
-            selected = "custom"
+            selected = "none"
           ),
           shiny::conditionalPanel(
             condition = sprintf("input['%s'] === 'custom'", ns("mapbiomas")),
@@ -116,9 +122,18 @@ analysis_ui <- function(id) {
           shiny::uiOutput(ns("raster_validation_message"))
         ),
         bslib::accordion_panel(
-          "4. Saída e execução",
+          step_title("3. Saída e execução", "step_output_status"),
           value = "step_output",
-          shiny::textInput(ns("output_folder"), "Pasta de saída", value = file.path(getwd(), "Results")),
+          shiny::div(
+            class = "output-folder-picker",
+            shiny::textInput(ns("output_folder"), "Pasta de saída", value = file.path(getwd(), "Results")),
+            shinyFiles::shinyDirButton(
+              ns("output_folder_select"),
+              "Selecionar pasta...",
+              "Escolha a pasta de saída",
+              class = "btn-outline-primary w-100"
+            )
+          ),
           shiny::textInput(ns("output_name"), "Nome da análise", value = "LandScript_result"),
           shiny::actionButton(ns("run"), "Rodar algoritmo", class = "btn-success btn-lg w-100 run-analysis-button", icon = shiny::icon("play")),
           shiny::div(
@@ -133,7 +148,10 @@ analysis_ui <- function(id) {
       id = ns("analysis_views"),
       bslib::nav_panel(
         "Mapa e malha",
-        leaflet::leafletOutput(ns("preview_map"), height = "650px")
+        shiny::div(
+          class = "analysis-preview-map-frame",
+          leaflet::leafletOutput(ns("preview_map"), height = "553px")
+        )
       ),
       bslib::nav_panel(
         "Resumo do arquivo",
@@ -218,6 +236,37 @@ analysis_server <- function(id) {
     progress_state <- shiny::reactiveVal(list(percent = 0, stage = "Aguardando", detail = "", status = "idle"))
     extra_custom_class_ids <- shiny::reactiveVal(integer())
     next_extra_custom_class_id <- shiny::reactiveVal(0L)
+    output_folder_roots <- c(
+      "Home" = normalizePath(path.expand("~"), mustWork = FALSE),
+      "Desktop" = file.path(normalizePath(path.expand("~"), mustWork = FALSE), "Desktop"),
+      "Projeto" = normalizePath(getwd(), mustWork = FALSE)
+    )
+    if (dir.exists("/Volumes")) {
+      output_folder_roots <- c(output_folder_roots, "Volumes" = "/Volumes")
+    }
+    output_folder_roots <- output_folder_roots[dir.exists(output_folder_roots)]
+    if (!length(output_folder_roots)) {
+      output_folder_roots <- c("Projeto" = normalizePath(getwd(), mustWork = FALSE))
+    }
+
+    shinyFiles::shinyDirChoose(
+      input,
+      "output_folder_select",
+      roots = output_folder_roots,
+      session = session,
+      allowDirCreate = TRUE
+    )
+
+    shiny::observeEvent(input$output_folder_select, {
+      selected_folder <- shinyFiles::parseDirPath(output_folder_roots, input$output_folder_select)
+      if (length(selected_folder) && nzchar(selected_folder[[1]])) {
+        shiny::updateTextInput(
+          session,
+          "output_folder",
+          value = normalizePath(selected_folder[[1]], mustWork = FALSE)
+        )
+      }
+    }, ignoreInit = TRUE)
 
     set_raster_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
       raster_validation_state(list(
@@ -257,6 +306,73 @@ analysis_server <- function(id) {
       !geospatial_validation_running() &&
         !is.null(geo_data()) &&
         !isTRUE(geo_invalid_geometry())
+    }
+
+    step_complete_badge <- function() {
+      shiny::span(
+        class = "step-complete-check",
+        title = "Etapa concluída",
+        shiny::icon("check")
+      )
+    }
+
+    mesh_step_ready <- shiny::reactive({
+      geospatial_ready() &&
+        (
+          isTRUE(input$no_mesh) ||
+            (!is.null(input$mesh_size_km) && is.finite(input$mesh_size_km) && input$mesh_size_km > 0)
+        )
+    })
+
+    raster_step_ready <- shiny::reactive({
+      state <- raster_validation_state()
+      !is.null(state) &&
+        identical(state$status, "complete") &&
+        nzchar(raster_folder_path()) &&
+        !is.null(pixel_area_value()) &&
+        is.finite(pixel_area_value()) &&
+        pixel_area_value() > 0
+    })
+
+    output_step_ready <- shiny::reactive({
+      !is.null(analysis_result())
+    })
+
+    output$step_geo_mesh_status <- shiny::renderUI({
+      if (isTRUE(mesh_step_ready())) step_complete_badge()
+    })
+
+    output$step_rasters_status <- shiny::renderUI({
+      if (isTRUE(raster_step_ready())) step_complete_badge()
+    })
+
+    output$step_output_status <- shiny::renderUI({
+      if (isTRUE(output_step_ready())) step_complete_badge()
+    })
+
+    set_analysis_step <- function(value = character()) {
+      try(bslib::accordion_panel_set("steps", value, session = session), silent = TRUE)
+      invisible(NULL)
+    }
+
+    go_to_analysis_step <- function(value, delay = 0.35) {
+      later::later(
+        function() {
+          set_analysis_step(value)
+        },
+        delay = delay
+      )
+      invisible(NULL)
+    }
+
+    close_analysis_steps <- function(delay = 0.35) {
+      later::later(
+        function() {
+          set_analysis_step(character())
+        },
+        delay = delay
+      )
+      invisible(NULL)
     }
 
     mark_invalid_geospatial_file <- function(clear_preview = TRUE) {
@@ -355,8 +471,9 @@ analysis_server <- function(id) {
         if (inspection$same_crs) "CRS consistente" else "CRS diferentes",
         if (inspection$same_resolution) "resolução consistente" else "resoluções diferentes"
       )
+      validation_status <- if (inspection$same_crs && inspection$same_resolution) "complete" else "warning"
       raster_validation_state(list(
-        status = if (inspection$same_crs && inspection$same_resolution) "complete" else "warning",
+        status = validation_status,
         percent = 100,
         type = if (inspection$same_crs && inspection$same_resolution) "success" else "warning",
         text = paste0(
@@ -366,6 +483,9 @@ analysis_server <- function(id) {
           paste(format(inspection$resolution, digits = 7), collapse = " × "), "."
         )
       ))
+      if (identical(validation_status, "complete")) {
+        go_to_analysis_step("step_output")
+      }
       invisible(inspection)
     }
 
@@ -499,6 +619,7 @@ analysis_server <- function(id) {
       geo_validation_state(list(status = "complete", type = "success", text = message))
       validation_state(list(type = "success", text = message))
       if (!isTRUE(shiny::isolate(running()))) toggle_run_button(FALSE)
+      go_to_analysis_step("step_rasters")
       invisible(result)
     }
 
@@ -767,23 +888,31 @@ analysis_server <- function(id) {
           options = leaflet::providerTileOptions(maxZoom = 20)
         ) |>
         leaflet::addProviderTiles(leaflet::providers$OpenStreetMap, group = "Ruas") |>
-        leaflet::hideGroup("Ruas")
+        leaflet::hideGroup("Ruas") |>
+        leaflet::addScaleBar(
+          position = "bottomleft",
+          options = leaflet::scaleBarOptions(
+            maxWidth = 160,
+            metric = TRUE,
+            imperial = FALSE,
+            updateWhenIdle = TRUE
+          )
+        ) |>
+        leaflet::addControl(
+          html = paste0(
+            "<div class='preview-north-arrow' aria-label='Norte'>",
+            "<div class='preview-north-label'>N</div>",
+            "<div class='preview-north-pointer'>▲</div>",
+            "</div>"
+          ),
+          position = "topright",
+          className = "preview-north-control"
+        )
 
       if (is.null(geo)) return(map |> leaflet::setView(lng = -54, lat = -12, zoom = 4))
 
       mesh <- tryCatch(preview_mesh(), error = function(e) NULL)
       bbox <- sf::st_bbox(geo)
-      map <- map |>
-        leaflet::addPolygons(
-          data = geo,
-          fill = TRUE,
-          fillColor = "#000000",
-          fillOpacity = 0.6,
-          color = "transparent",
-          weight = 0,
-          opacity = 0,
-          group = "Prévia do limite"
-        )
       if (!is.null(mesh)) {
         preview <- mesh_for_leaflet(mesh)
         map <- map |>
@@ -797,6 +926,17 @@ analysis_server <- function(id) {
             group = "Malha"
           )
       }
+      map <- map |>
+        leaflet::addPolygons(
+          data = geo,
+          fill = TRUE,
+          fillColor = "#000000",
+          fillOpacity = 0.6,
+          color = "transparent",
+          weight = 0,
+          opacity = 0,
+          group = "Prévia do limite"
+        )
       map |>
         leaflet::addLayersControl(
           baseGroups = c("Satélite (Esri)", "Ruas"),
@@ -1013,6 +1153,9 @@ analysis_server <- function(id) {
       if (is.null(pixel_area_value()) || !is.finite(pixel_area_value()) || pixel_area_value() <= 0) {
         stop("Selecione uma pasta de rasters válida para estimar a área do pixel.", call. = FALSE)
       }
+      if (is.null(input$mapbiomas) || !nzchar(input$mapbiomas)) {
+        stop("Selecione uma legenda das classes antes de rodar o algoritmo.", call. = FALSE)
+      }
       mapbiomas_class_map(input$mapbiomas, custom_classes())
       list(rasters = rasters, output_folder = output_folder, resume_proxy = FALSE)
     }
@@ -1151,6 +1294,7 @@ analysis_server <- function(id) {
           ))
           validation_state(list(type = "success", text = "Análise concluída com sucesso."))
           shiny::showNotification("Análise concluída com sucesso.", type = "message", duration = 8)
+          close_analysis_steps()
         } else {
           error_lines <- c(process$read_error_lines(), process$read_output_lines())
           progress <- read_progress(job_progress_file())
@@ -1263,7 +1407,7 @@ analysis_server <- function(id) {
         filter = "top",
         options = list(
           scrollX = TRUE,
-          pageLength = 15,
+          pageLength = 5,
           dom = "frtip",
           language = list(
             search = "Pesquisar:",

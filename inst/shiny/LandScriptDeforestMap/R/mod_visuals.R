@@ -13,7 +13,7 @@ visuals_ui <- function(id) {
         col_widths = c(4, 4, 4),
         shiny::fileInput(
           ns("manual_result"),
-          "Carregar resultados: ZIP, GeoPackage, shapefile ou tabela (opcional)",
+          "Carregar resultados: ZIP, GeoPackage ou tabela (opcional)",
           multiple = TRUE,
           accept = c(
             ".zip", ".gpkg", ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj",

@@ -719,10 +719,13 @@ create.preview.mesh <- function(
   }
 
   bbox_geometry <- sf::st_as_sfc(sf::st_bbox(geo), crs = sf::st_crs(geo))
-  working_bbox <- if (identical(mesh.unit, "meters")) {
-    sf::st_transform(bbox_geometry, local_metric_crs(geo))
+  if (identical(mesh.unit, "meters")) {
+    working_crs <- local_metric_crs(geo)
+    working_bbox <- sf::st_transform(bbox_geometry, working_crs)
+    working_geo <- sf::st_transform(geo, working_crs)
   } else {
-    bbox_geometry
+    working_bbox <- bbox_geometry
+    working_geo <- geo
   }
 
   grid_geometry <- sf::st_make_grid(working_bbox, cellsize = mesh.size, square = TRUE)
@@ -740,6 +743,32 @@ create.preview.mesh <- function(
     Grid_ID = seq_along(grid_geometry),
     geometry = grid_geometry
   )
+
+  previous_s2 <- sf::sf_use_s2()
+  suppressMessages(sf::sf_use_s2(FALSE))
+  on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
+
+  touches_study_area <- tryCatch(
+    lengths(suppressWarnings(sf::st_intersects(mesh, sf::st_geometry(working_geo)))) > 0L,
+    error = function(e) {
+      repaired_geo <- tryCatch(
+        repair_polygon_geometry(working_geo),
+        error = function(err) NULL
+      )
+      if (is.null(repaired_geo) || !inherits(repaired_geo, "sf") || !nrow(repaired_geo)) {
+        return(rep(FALSE, nrow(mesh)))
+      }
+      tryCatch(
+        lengths(suppressWarnings(sf::st_intersects(mesh, sf::st_geometry(repaired_geo)))) > 0L,
+        error = function(err) rep(FALSE, nrow(mesh))
+      )
+    }
+  )
+  mesh <- mesh[touches_study_area, , drop = FALSE]
+  if (nrow(mesh)) {
+    mesh$ID_mesh <- seq_len(nrow(mesh))
+  }
+
   if (identical(mesh.unit, "meters")) {
     mesh <- sf::st_transform(mesh, output_crs)
   } else if (!identical(sf::st_crs(mesh), sf::st_crs(output_crs))) {
