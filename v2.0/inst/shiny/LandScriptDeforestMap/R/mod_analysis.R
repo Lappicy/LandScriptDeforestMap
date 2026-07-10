@@ -83,14 +83,14 @@ analysis_ui <- function(id) {
             ns("mapbiomas"),
             "Legenda das classes",
             choices = c(
-              "Selecione a legenda..." = "",
+              "Sem legenda" = "none",
               "Personalizar" = "custom",
               "MapBiomas - Coleção 4" = "4",
               "MapBiomas - Coleção 7.1" = "7.1",
               "MapBiomas - Coleção 8" = "8",
               "MapBiomas - Coleção 10" = "10"
             ),
-            selected = ""
+            selected = "none"
           ),
           shiny::conditionalPanel(
             condition = sprintf("input['%s'] === 'custom'", ns("mapbiomas")),
@@ -146,7 +146,6 @@ analysis_ui <- function(id) {
     ),
     bslib::navset_card_tab(
       id = ns("analysis_views"),
-      height = "635px",
       bslib::nav_panel(
         "Mapa e malha",
         shiny::div(
@@ -351,6 +350,31 @@ analysis_server <- function(id) {
       if (isTRUE(output_step_ready())) step_complete_badge()
     })
 
+    set_analysis_step <- function(value = character()) {
+      try(bslib::accordion_panel_set("steps", value, session = session), silent = TRUE)
+      invisible(NULL)
+    }
+
+    go_to_analysis_step <- function(value, delay = 0.35) {
+      later::later(
+        function() {
+          set_analysis_step(value)
+        },
+        delay = delay
+      )
+      invisible(NULL)
+    }
+
+    close_analysis_steps <- function(delay = 0.35) {
+      later::later(
+        function() {
+          set_analysis_step(character())
+        },
+        delay = delay
+      )
+      invisible(NULL)
+    }
+
     mark_invalid_geospatial_file <- function(clear_preview = TRUE) {
       if (isTRUE(clear_preview)) {
         geo_path(NULL)
@@ -447,8 +471,9 @@ analysis_server <- function(id) {
         if (inspection$same_crs) "CRS consistente" else "CRS diferentes",
         if (inspection$same_resolution) "resolução consistente" else "resoluções diferentes"
       )
+      validation_status <- if (inspection$same_crs && inspection$same_resolution) "complete" else "warning"
       raster_validation_state(list(
-        status = if (inspection$same_crs && inspection$same_resolution) "complete" else "warning",
+        status = validation_status,
         percent = 100,
         type = if (inspection$same_crs && inspection$same_resolution) "success" else "warning",
         text = paste0(
@@ -458,6 +483,9 @@ analysis_server <- function(id) {
           paste(format(inspection$resolution, digits = 7), collapse = " × "), "."
         )
       ))
+      if (identical(validation_status, "complete")) {
+        go_to_analysis_step("step_output")
+      }
       invisible(inspection)
     }
 
@@ -591,6 +619,7 @@ analysis_server <- function(id) {
       geo_validation_state(list(status = "complete", type = "success", text = message))
       validation_state(list(type = "success", text = message))
       if (!isTRUE(shiny::isolate(running()))) toggle_run_button(FALSE)
+      go_to_analysis_step("step_rasters")
       invisible(result)
     }
 
@@ -859,7 +888,26 @@ analysis_server <- function(id) {
           options = leaflet::providerTileOptions(maxZoom = 20)
         ) |>
         leaflet::addProviderTiles(leaflet::providers$OpenStreetMap, group = "Ruas") |>
-        leaflet::hideGroup("Ruas")
+        leaflet::hideGroup("Ruas") |>
+        leaflet::addScaleBar(
+          position = "bottomleft",
+          options = leaflet::scaleBarOptions(
+            maxWidth = 160,
+            metric = TRUE,
+            imperial = FALSE,
+            updateWhenIdle = TRUE
+          )
+        ) |>
+        leaflet::addControl(
+          html = paste0(
+            "<div class='preview-north-arrow' aria-label='Norte'>",
+            "<div class='preview-north-label'>N</div>",
+            "<div class='preview-north-pointer'>▲</div>",
+            "</div>"
+          ),
+          position = "topright",
+          className = "preview-north-control"
+        )
 
       if (is.null(geo)) return(map |> leaflet::setView(lng = -54, lat = -12, zoom = 4))
 
@@ -1246,6 +1294,7 @@ analysis_server <- function(id) {
           ))
           validation_state(list(type = "success", text = "Análise concluída com sucesso."))
           shiny::showNotification("Análise concluída com sucesso.", type = "message", duration = 8)
+          close_analysis_steps()
         } else {
           error_lines <- c(process$read_error_lines(), process$read_output_lines())
           progress <- read_progress(job_progress_file())

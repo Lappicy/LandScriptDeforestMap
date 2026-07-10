@@ -1,5 +1,8 @@
 mapbiomas_class_map <- function(version = NULL, custom = NULL) {
   version <- as.character(version %||% "")
+  if (identical(version, "none")) {
+    return(list())
+  }
   maps <- list(
     `4` = list(
       Forest = c(1, 2, 3),
@@ -42,6 +45,10 @@ mapbiomas_class_map <- function(version = NULL, custom = NULL) {
 
 count.classes <- function(proxy.table, MAPBIOMAS = NULL, custom.classes = NULL) {
   mapping <- mapbiomas_class_map(MAPBIOMAS, custom.classes)
+  if (!length(mapping)) {
+    attr(proxy.table, "summary_class_columns") <- character()
+    return(proxy.table)
+  }
   numeric_values <- suppressWarnings(as.numeric(names(proxy.table)))
   numeric_names <- !is.na(numeric_values)
 
@@ -594,7 +601,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
     unit_table[[column]] <- factor(unit_table[[column]])
   }
 
-  progress(78, "Classes", paste0("Aplicando a legenda MAPBIOMAS ", params$mapbiomas))
+  if (identical(params$mapbiomas, "none")) {
+    progress(78, "Classes", "Mantendo as classes originais dos rasters")
+  } else if (identical(params$mapbiomas, "custom")) {
+    progress(78, "Classes", "Aplicando a legenda personalizada")
+  } else {
+    progress(78, "Classes", paste0("Aplicando a legenda MapBiomas Coleção ", params$mapbiomas))
+  }
   unit_table <- count.classes(
     unit_table,
     MAPBIOMAS = params$mapbiomas,

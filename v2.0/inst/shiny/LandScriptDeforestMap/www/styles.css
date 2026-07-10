@@ -131,6 +131,37 @@ body {
   background: #d9e3e0;
 }
 
+.preview-north-control {
+  margin: 0.7rem 0.7rem 0 0 !important;
+}
+
+.preview-north-arrow {
+  display: grid;
+  place-items: center;
+  min-width: 2.35rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 0.35rem 0.35rem;
+  border: 1px solid rgba(23, 107, 91, 0.22);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.86);
+  color: #10251f;
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.2);
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.preview-north-label {
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.preview-north-pointer {
+  margin-top: 0.1rem;
+  color: #10251f;
+  font-size: 1.15rem;
+}
+
 .geo-upload-dropzone,
 .raster-upload-dropzone {
   margin-bottom: 0.35rem;
