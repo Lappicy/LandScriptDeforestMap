@@ -1,5 +1,12 @@
 analysis_ui <- function(id) {
   ns <- shiny::NS(id)
+  step_title <- function(label, status_output_id) {
+    shiny::span(
+      class = "analysis-step-title",
+      shiny::span(label),
+      shiny::uiOutput(ns(status_output_id), inline = TRUE)
+    )
+  }
 
   bslib::layout_sidebar(
     sidebar = bslib::sidebar(
@@ -8,8 +15,9 @@ analysis_ui <- function(id) {
       bslib::accordion(
         id = ns("steps"),
         open = FALSE,
+        multiple = FALSE,
         bslib::accordion_panel(
-          "1. Arquivo geoespacial e malha",
+          step_title("1. Arquivo geoespacial e malha", "step_geo_mesh_status"),
           value = "step_geo_mesh",
           shiny::div(
             class = "geo-upload-dropzone",
@@ -57,7 +65,7 @@ analysis_ui <- function(id) {
           )
         ),
         bslib::accordion_panel(
-          "2. Rasters e classes",
+          step_title("2. Rasters e classes", "step_rasters_status"),
           value = "step_rasters",
           shiny::div(
             class = "raster-upload-dropzone",
@@ -75,13 +83,14 @@ analysis_ui <- function(id) {
             ns("mapbiomas"),
             "Legenda das classes",
             choices = c(
+              "Selecione a legenda..." = "",
               "Personalizar" = "custom",
               "MapBiomas - Coleção 4" = "4",
               "MapBiomas - Coleção 7.1" = "7.1",
               "MapBiomas - Coleção 8" = "8",
               "MapBiomas - Coleção 10" = "10"
             ),
-            selected = "custom"
+            selected = ""
           ),
           shiny::conditionalPanel(
             condition = sprintf("input['%s'] === 'custom'", ns("mapbiomas")),
@@ -113,7 +122,7 @@ analysis_ui <- function(id) {
           shiny::uiOutput(ns("raster_validation_message"))
         ),
         bslib::accordion_panel(
-          "3. Saída e execução",
+          step_title("3. Saída e execução", "step_output_status"),
           value = "step_output",
           shiny::div(
             class = "output-folder-picker",
@@ -137,9 +146,13 @@ analysis_ui <- function(id) {
     ),
     bslib::navset_card_tab(
       id = ns("analysis_views"),
+      height = "635px",
       bslib::nav_panel(
         "Mapa e malha",
-        leaflet::leafletOutput(ns("preview_map"), height = "553px")
+        shiny::div(
+          class = "analysis-preview-map-frame",
+          leaflet::leafletOutput(ns("preview_map"), height = "553px")
+        )
       ),
       bslib::nav_panel(
         "Resumo do arquivo",
@@ -295,6 +308,48 @@ analysis_server <- function(id) {
         !is.null(geo_data()) &&
         !isTRUE(geo_invalid_geometry())
     }
+
+    step_complete_badge <- function() {
+      shiny::span(
+        class = "step-complete-check",
+        title = "Etapa concluída",
+        shiny::icon("check")
+      )
+    }
+
+    mesh_step_ready <- shiny::reactive({
+      geospatial_ready() &&
+        (
+          isTRUE(input$no_mesh) ||
+            (!is.null(input$mesh_size_km) && is.finite(input$mesh_size_km) && input$mesh_size_km > 0)
+        )
+    })
+
+    raster_step_ready <- shiny::reactive({
+      state <- raster_validation_state()
+      !is.null(state) &&
+        identical(state$status, "complete") &&
+        nzchar(raster_folder_path()) &&
+        !is.null(pixel_area_value()) &&
+        is.finite(pixel_area_value()) &&
+        pixel_area_value() > 0
+    })
+
+    output_step_ready <- shiny::reactive({
+      !is.null(analysis_result())
+    })
+
+    output$step_geo_mesh_status <- shiny::renderUI({
+      if (isTRUE(mesh_step_ready())) step_complete_badge()
+    })
+
+    output$step_rasters_status <- shiny::renderUI({
+      if (isTRUE(raster_step_ready())) step_complete_badge()
+    })
+
+    output$step_output_status <- shiny::renderUI({
+      if (isTRUE(output_step_ready())) step_complete_badge()
+    })
 
     mark_invalid_geospatial_file <- function(clear_preview = TRUE) {
       if (isTRUE(clear_preview)) {
@@ -1049,6 +1104,9 @@ analysis_server <- function(id) {
       output_folder <- ensure_output_folder(input$output_folder)
       if (is.null(pixel_area_value()) || !is.finite(pixel_area_value()) || pixel_area_value() <= 0) {
         stop("Selecione uma pasta de rasters válida para estimar a área do pixel.", call. = FALSE)
+      }
+      if (is.null(input$mapbiomas) || !nzchar(input$mapbiomas)) {
+        stop("Selecione uma legenda das classes antes de rodar o algoritmo.", call. = FALSE)
       }
       mapbiomas_class_map(input$mapbiomas, custom_classes())
       list(rasters = rasters, output_folder = output_folder, resume_proxy = FALSE)
