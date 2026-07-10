@@ -17,7 +17,7 @@ visuals_ui <- function(id) {
           multiple = TRUE,
           accept = c(
             ".zip", ".gpkg", ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj",
-            ".geojson", ".json", ".kml", ".gml",
+            ".sbn", ".sbx", ".xml", ".geojson", ".json", ".kml", ".gml",
             ".xlsx", ".txt", ".tsv", ".csv", ".rds"
           )
         ),

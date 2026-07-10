@@ -473,7 +473,9 @@ complete_shapefile_bundle <- function(primary, destination, uploaded_files = cha
       zip = "Confira se o ZIP contém todos os componentes do shapefile.",
       upload = paste0(
         "No upload pelo navegador, o Shiny só recebe os arquivos selecionados. ",
-        "Envie um .zip com todos os componentes ou selecione todos eles juntos."
+        "Para buscar os auxiliares automaticamente no mesmo diretório, use o botão ",
+        "'Selecionar arquivo local...'. Alternativamente, envie um .zip com todos ",
+        "os componentes ou selecione todos eles juntos."
       )
     )
     stop(

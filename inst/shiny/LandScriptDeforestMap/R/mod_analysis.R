@@ -28,11 +28,19 @@ analysis_ui <- function(id) {
               accept = c(
                 ".gpkg", ".geojson", ".json", ".zip",
                 ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj", ".sbn", ".sbx",
-                ".kml", ".gml"
+                ".xml", ".kml", ".gml"
               ),
               buttonLabel = "Selecionar ou arrastar arquivo(s)",
               placeholder = "Inserir o arquivo .gpkg, .shp, .zip, ou .json"
-            ),
+            )
+          ),
+          shinyFiles::shinyFilesButton(
+            ns("geo_local_select"),
+            "Selecionar arquivo local...",
+            "Escolha um GeoPackage, shapefile, GeoJSON ou ZIP",
+            multiple = FALSE,
+            class = "btn-outline-primary w-100 local-vector-button",
+            icon = shiny::icon("folder-open")
           ),
           shiny::uiOutput(ns("geo_validation_message")),
           shiny::selectizeInput(
@@ -248,6 +256,14 @@ analysis_server <- function(id) {
     if (!length(output_folder_roots)) {
       output_folder_roots <- c("Projeto" = normalizePath(getwd(), mustWork = FALSE))
     }
+
+    shinyFiles::shinyFileChoose(
+      input,
+      "geo_local_select",
+      roots = output_folder_roots,
+      session = session,
+      filetypes = unique(c("zip", supported_vector_extensions(), shapefile_extensions()))
+    )
 
     shinyFiles::shinyDirChoose(
       input,
@@ -779,6 +795,47 @@ analysis_server <- function(id) {
         shiny::span(label %||% path, title = path)
       )
     })
+
+    shiny::observeEvent(input$geo_local_select, {
+      selected <- shinyFiles::parseFilePaths(output_folder_roots, input$geo_local_select)
+      if (is.null(selected) || !nrow(selected)) return(NULL)
+      selected_path <- selected$datapath[[1]]
+      if (is.null(selected_path) || !nzchar(selected_path) || !file.exists(selected_path)) return(NULL)
+
+      token <- geo_validation_token() + 1L
+      geo_validation_token(token)
+      stop_geospatial_validation_process()
+      geo_path(NULL)
+      geo_data(NULL)
+      geo_preview(NULL)
+      geo_invalid_geometry(FALSE)
+      validation_state(NULL)
+      set_geo_validation_progress(1, "Recebendo arquivo", "Preparando arquivo local selecionado.")
+      toggle_run_button(TRUE)
+
+      source_label <- basename(selected_path)
+      later::later(function() {
+        if (!identical(token, shiny::isolate(geo_validation_token()))) return(NULL)
+        tryCatch({
+          set_geo_validation_progress(2, "Preparando arquivo", "Buscando arquivos auxiliares no mesmo diretório.")
+          upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
+          path <- stage_local_vector(selected_path, upload_dir)
+          load_geospatial_file(path, source_label, token)
+        }, error = function(e) {
+          if (identical(conditionMessage(e), invalid_geometry_message())) {
+            mark_invalid_geospatial_file()
+          } else {
+            geo_path(NULL)
+            geo_data(NULL)
+            geo_preview(NULL)
+            geo_invalid_geometry(FALSE)
+            geo_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
+            validation_state(list(type = "danger", text = conditionMessage(e)))
+            if (!isTRUE(shiny::isolate(running()))) toggle_run_button(TRUE)
+          }
+        })
+      }, delay = 0.05)
+    }, ignoreInit = TRUE)
 
     shiny::observeEvent(input$geo_upload, {
       upload <- input$geo_upload

@@ -266,6 +266,20 @@ body {
   background-color: var(--ls-accent) !important;
 }
 
+.local-vector-button {
+  margin: 0.25rem 0 0.65rem;
+  border-color: rgba(23, 107, 91, 0.35);
+  color: var(--ls-accent);
+  font-weight: 700;
+}
+
+.local-vector-button:hover,
+.local-vector-button:focus {
+  border-color: var(--ls-accent);
+  background: rgba(23, 107, 91, 0.08);
+  color: var(--ls-accent);
+}
+
 .custom-classes-extra {
   margin-top: 0.75rem;
 }
@@ -359,13 +373,37 @@ body {
   margin-bottom: 0.7rem;
 }
 
+#directory-modal .sF-newDir,
+#directory-modal .sF-sort,
+#directory-modal .sF-view,
+#directory-modal .sF-refresh,
+#directory-modal .sF-textChoice,
+#directory-modal .sF-warning {
+  display: none !important;
+}
+
+#directory-modal .btn-toolbar {
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+#directory-modal .sF-navigation {
+  justify-content: center;
+}
+
 .sF-breadcrumps,
 #directory-modal .sF-breadcrumps {
-  width: auto;
+  width: min(100%, 28rem);
   min-width: min(100%, 18rem);
-  margin-left: 0;
+  margin: 0 auto;
   border-color: rgba(23, 107, 91, 0.22);
   border-radius: 0.5rem;
+}
+
+#directory-modal .sF-breadcrumps {
+  height: 2.8rem;
+  font-size: 1rem;
+  font-weight: 650;
 }
 
 .sF-dirWindow {
