@@ -9,8 +9,8 @@ analysis_ui <- function(id) {
         id = ns("steps"),
         open = FALSE,
         bslib::accordion_panel(
-          "1. Arquivo geoespacial",
-          value = "step_geo",
+          "1. Arquivo geoespacial e malha",
+          value = "step_geo_mesh",
           shiny::div(
             class = "geo-upload-dropzone",
             shiny::fileInput(
@@ -36,11 +36,8 @@ analysis_ui <- function(id) {
               maxItems = 2,
               placeholder = "Nenhuma coluna = toda a área"
             )
-          )
-        ),
-        bslib::accordion_panel(
-          "2. Malha",
-          value = "step_mesh",
+          ),
+          shiny::tags$hr(class = "step-section-divider"),
           shiny::checkboxInput(ns("no_mesh"), "Não criar malha", FALSE),
           shiny::conditionalPanel(
             condition = sprintf("!input['%s']", ns("no_mesh")),
@@ -60,7 +57,7 @@ analysis_ui <- function(id) {
           )
         ),
         bslib::accordion_panel(
-          "3. Rasters e classes",
+          "2. Rasters e classes",
           value = "step_rasters",
           shiny::div(
             class = "raster-upload-dropzone",
@@ -116,9 +113,18 @@ analysis_ui <- function(id) {
           shiny::uiOutput(ns("raster_validation_message"))
         ),
         bslib::accordion_panel(
-          "4. Saída e execução",
+          "3. Saída e execução",
           value = "step_output",
-          shiny::textInput(ns("output_folder"), "Pasta de saída", value = file.path(getwd(), "Results")),
+          shiny::div(
+            class = "output-folder-picker",
+            shiny::textInput(ns("output_folder"), "Pasta de saída", value = file.path(getwd(), "Results")),
+            shinyFiles::shinyDirButton(
+              ns("output_folder_select"),
+              "Selecionar pasta...",
+              "Escolha a pasta de saída",
+              class = "btn-outline-primary w-100"
+            )
+          ),
           shiny::textInput(ns("output_name"), "Nome da análise", value = "LandScript_result"),
           shiny::actionButton(ns("run"), "Rodar algoritmo", class = "btn-success btn-lg w-100 run-analysis-button", icon = shiny::icon("play")),
           shiny::div(
@@ -133,7 +139,7 @@ analysis_ui <- function(id) {
       id = ns("analysis_views"),
       bslib::nav_panel(
         "Mapa e malha",
-        leaflet::leafletOutput(ns("preview_map"), height = "650px")
+        leaflet::leafletOutput(ns("preview_map"), height = "553px")
       ),
       bslib::nav_panel(
         "Resumo do arquivo",
@@ -218,6 +224,37 @@ analysis_server <- function(id) {
     progress_state <- shiny::reactiveVal(list(percent = 0, stage = "Aguardando", detail = "", status = "idle"))
     extra_custom_class_ids <- shiny::reactiveVal(integer())
     next_extra_custom_class_id <- shiny::reactiveVal(0L)
+    output_folder_roots <- c(
+      "Home" = normalizePath(path.expand("~"), mustWork = FALSE),
+      "Desktop" = file.path(normalizePath(path.expand("~"), mustWork = FALSE), "Desktop"),
+      "Projeto" = normalizePath(getwd(), mustWork = FALSE)
+    )
+    if (dir.exists("/Volumes")) {
+      output_folder_roots <- c(output_folder_roots, "Volumes" = "/Volumes")
+    }
+    output_folder_roots <- output_folder_roots[dir.exists(output_folder_roots)]
+    if (!length(output_folder_roots)) {
+      output_folder_roots <- c("Projeto" = normalizePath(getwd(), mustWork = FALSE))
+    }
+
+    shinyFiles::shinyDirChoose(
+      input,
+      "output_folder_select",
+      roots = output_folder_roots,
+      session = session,
+      allowDirCreate = TRUE
+    )
+
+    shiny::observeEvent(input$output_folder_select, {
+      selected_folder <- shinyFiles::parseDirPath(output_folder_roots, input$output_folder_select)
+      if (length(selected_folder) && nzchar(selected_folder[[1]])) {
+        shiny::updateTextInput(
+          session,
+          "output_folder",
+          value = normalizePath(selected_folder[[1]], mustWork = FALSE)
+        )
+      }
+    }, ignoreInit = TRUE)
 
     set_raster_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
       raster_validation_state(list(

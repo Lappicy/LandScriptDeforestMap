@@ -215,6 +215,29 @@ body {
   margin-bottom: 0.55rem;
 }
 
+.step-section-divider {
+  margin: 1rem 0;
+  border-color: rgba(23, 107, 91, 0.16);
+  opacity: 1;
+}
+
+.output-folder-picker {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+}
+
+.output-folder-picker .shiny-input-container {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.output-folder-picker .shinyDirButton {
+  border-color: rgba(23, 107, 91, 0.35);
+  color: var(--ls-accent);
+  font-weight: 700;
+}
+
 .progress-status {
   display: grid;
   gap: 0.2rem;
@@ -340,6 +363,29 @@ body {
 
 .source-results-card .card-body {
   overflow: visible !important;
+}
+
+.source-results-card .bslib-grid {
+  align-items: end;
+}
+
+.source-results-card .shiny-input-container {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.source-results-card .form-label,
+.source-results-card .control-label {
+  min-height: 2.8rem;
+  display: flex;
+  align-items: flex-end;
+  margin-bottom: 0.35rem;
+}
+
+.source-results-card .selectize-control,
+.source-results-card .form-select,
+.source-results-card .input-group {
+  margin-bottom: 0;
 }
 
 .source-header {
