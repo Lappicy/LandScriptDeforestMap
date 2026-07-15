@@ -280,6 +280,22 @@ body {
   color: var(--ls-accent);
 }
 
+.raster-local-button {
+  margin: 0 0 0.45rem;
+  min-height: 2.9rem;
+  border-color: var(--ls-accent);
+  background: var(--ls-accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.raster-local-button:hover,
+.raster-local-button:focus {
+  border-color: #11594b;
+  background: #11594b;
+  color: #fff;
+}
+
 .custom-classes-extra {
   margin-top: 0.75rem;
 }

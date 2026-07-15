@@ -76,6 +76,9 @@ LandScriptDeforestMap::runLandScriptApp()
 
 A aplicação é copiada para uma pasta temporária antes da execução. Isso evita
 que resultados sejam gravados dentro da pasta de instalação do pacote.
+Essa cópia contém apenas os arquivos da interface. Os rasters classificados
+são lidos diretamente da pasta selecionada e não são duplicados no disco
+interno nem na pasta proxy.
 
 Os resultados podem ser baixados em um único arquivo ZIP. Esse ZIP pode ser
 carregado novamente na aba **Gráficos e mapas**, que seleciona automaticamente

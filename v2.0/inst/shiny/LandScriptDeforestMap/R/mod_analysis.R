@@ -75,23 +75,15 @@ analysis_ui <- function(id) {
         bslib::accordion_panel(
           step_title("2. Rasters e classes", "step_rasters_status"),
           value = "step_rasters",
-          shiny::div(
-            class = "raster-upload-dropzone",
-            shiny::fileInput(
-              ns("raster_upload"),
-              label = "",
-              multiple = TRUE,
-              accept = c(".tif", ".tiff", ".img", ".vrt", ".grd", ".zip"),
-              buttonLabel = "Selecionar ou arrastar pasta/raster(s)",
-              placeholder = "Inserir pasta ou arquivos .tif/.tiff com as imagens classificadas"
-            )
-          ),
           shinyFiles::shinyDirButton(
             ns("raster_local_select"),
-            "Selecionar pasta local...",
+            "Selecionar pasta de rasters...",
             "Escolha a pasta local com os rasters classificados",
-            class = "btn-outline-primary w-100 local-vector-button",
+            class = "btn-primary w-100 raster-local-button",
             icon = shiny::icon("folder-open")
+          ),
+          shiny::helpText(
+            "Os rasters são lidos diretamente da pasta selecionada e não são copiados para o disco interno."
           ),
           shiny::uiOutput(ns("raster_folder_display")),
           shiny::selectInput(
@@ -235,7 +227,6 @@ analysis_server <- function(id) {
     pixel_area_value <- shiny::reactiveVal(NULL)
     pixel_area_summary <- shiny::reactiveVal("—")
     raster_folder_path <- shiny::reactiveVal("")
-    raster_source_is_local <- shiny::reactiveVal(FALSE)
     raster_folder_label <- shiny::reactiveVal("")
     raster_validation_token <- shiny::reactiveVal(0L)
     raster_validation_process <- shiny::reactiveVal(NULL)
@@ -538,63 +529,6 @@ analysis_server <- function(id) {
       invisible(inspection)
     }
 
-    schedule_uploaded_raster_validation <- function(upload, token) {
-      stop_raster_validation_process()
-
-      upload_dir <- file.path(session_dir, paste0("rasters_", token, "_", as.integer(Sys.time())))
-      progress_file <- file.path(session_dir, paste0("raster_validation_", token, ".json"))
-      result_file <- file.path(session_dir, paste0("raster_validation_", token, ".rds"))
-      safe_unlink(c(progress_file, result_file))
-      write_progress(progress_file, 1, "Carregando arquivos", "Preparando validação em segundo plano.", "running")
-
-      process <- callr::r_bg(
-        func = function(upload, upload_dir, progress_file, result_file, app_directory) {
-          source(file.path(app_directory, "R", "utils.R"), local = globalenv())
-
-          progress <- function(percent, stage, detail = NULL, status = "running") {
-            write_progress(progress_file, percent, stage, detail, status)
-          }
-          scaled_validation_progress <- function(percent, stage, detail = NULL, status = "running") {
-            progress(20 + (max(0, min(100, as.numeric(percent))) / 100) * 78, stage, detail, status)
-          }
-
-          tryCatch({
-            progress(1, "Carregando arquivos", "Copiando arquivos enviados para a sessão.")
-            staged_folder <- stage_raster_upload(upload, upload_dir, progress = progress)
-            inspection <- inspect_raster_folder(staged_folder, progress = scaled_validation_progress)
-            saveRDS(
-              list(
-                staged_folder = normalizePath(staged_folder, mustWork = TRUE),
-                label = paste0("Upload: ", nrow(upload), " arquivo(s) enviado(s)"),
-                inspection = inspection
-              ),
-              result_file
-            )
-            progress(100, "Validação concluída", "Rasters carregados e validados.", "complete")
-          }, error = function(e) {
-            write_progress(progress_file, 100, "Erro", conditionMessage(e), "error")
-            stop(e)
-          })
-        },
-        args = list(
-          upload = upload,
-          upload_dir = upload_dir,
-          progress_file = progress_file,
-          result_file = result_file,
-          app_directory = app_root()
-        ),
-        supervise = TRUE,
-        stdout = "|",
-        stderr = "|"
-      )
-
-      raster_validation_process(process)
-      raster_validation_progress_file(progress_file)
-      raster_validation_result_file(result_file)
-      raster_validation_job_token(token)
-      invisible(process)
-    }
-
     schedule_local_raster_validation <- function(folder, token) {
       stop_raster_validation_process()
 
@@ -881,27 +815,6 @@ analysis_server <- function(id) {
       schedule_geospatial_validation(path, source_label, token)
     }
 
-    shiny::observeEvent(input$raster_upload, {
-      upload <- input$raster_upload
-      if (is.null(upload) || !nrow(upload)) return(NULL)
-      token <- raster_validation_token() + 1L
-      raster_validation_token(token)
-      raster_folder_path("")
-      raster_source_is_local(FALSE)
-      raster_folder_label("Upload: preparando arquivos enviados...")
-      validation_state(NULL)
-      raster_inspection(NULL)
-      pixel_area_value(NULL)
-      pixel_area_summary("—")
-      toggle_run_button(TRUE)
-      set_raster_validation_progress(
-        1,
-        "Carregando arquivos",
-        "Arquivos recebidos pelo Shiny. Preparando validação."
-      )
-      schedule_uploaded_raster_validation(upload, token)
-    }, ignoreInit = TRUE)
-
     shiny::observeEvent(input$raster_local_select, {
       selected_folder <- shinyFiles::parseDirPath(output_folder_roots, input$raster_local_select)
       if (!length(selected_folder) || !nzchar(selected_folder[[1]]) || !dir.exists(selected_folder[[1]])) {
@@ -911,7 +824,6 @@ analysis_server <- function(id) {
       raster_validation_token(token)
       folder <- normalizePath(selected_folder[[1]], mustWork = TRUE)
       raster_folder_path(folder)
-      raster_source_is_local(TRUE)
       raster_folder_label(paste0("Pasta local: ", folder))
       validation_state(NULL)
       raster_inspection(NULL)
@@ -930,7 +842,6 @@ analysis_server <- function(id) {
       raster_validation_token(raster_validation_token() + 1L)
       stop_raster_validation_process()
       raster_folder_path("")
-      raster_source_is_local(FALSE)
       raster_folder_label("")
       validation_state(NULL)
       raster_validation_state(NULL)
@@ -1554,9 +1465,10 @@ analysis_server <- function(id) {
           raster_index = if (resume_proxy) NULL else validated$rasters,
           validated_geo_rds = if (resume_proxy) NULL else validated_geo_rds(),
           max_cells = 1000000L,
+          use_direct_geo_path = !resume_proxy && isTRUE(geo_source_is_local()),
+          use_direct_raster_path = !resume_proxy,
           use_direct_paths = !resume_proxy &&
-            isTRUE(geo_source_is_local()) &&
-            isTRUE(raster_source_is_local()),
+            isTRUE(geo_source_is_local()),
           resume_proxy = resume_proxy
         )
 

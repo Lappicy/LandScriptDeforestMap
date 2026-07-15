@@ -512,7 +512,8 @@ analysis_fingerprint <- function(params) {
     custom_classes = params$custom_classes,
     pixel_km2_ratio = params$pixel_km2_ratio,
     max_cells = params$max_cells %||% NA_integer_,
-    use_direct_paths = isTRUE(params$use_direct_paths)
+    use_direct_geo_path = isTRUE(params$use_direct_paths) || isTRUE(params$use_direct_geo_path),
+    use_direct_raster_path = isTRUE(params$use_direct_paths) || isTRUE(params$use_direct_raster_path)
   )
 }
 
@@ -532,21 +533,35 @@ prepare_proxy_inputs <- function(params, proxy_dir) {
   geo_dir <- file.path(input_dir, "geo")
   raster_dir <- file.path(input_dir, "rasters")
   safe_unlink(input_dir)
-  dir.create(geo_dir, recursive = TRUE, showWarnings = FALSE)
-  dir.create(raster_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(input_dir, recursive = TRUE, showWarnings = FALSE)
 
-  geo_files <- copy_files_to_proxy(geo_bundle_files(params$geo_path), geo_dir)
-  geo_primary <- geo_files[
-    tolower(tools::file_ext(geo_files)) == tolower(tools::file_ext(params$geo_path)) &
-      basename(geo_files) == basename(params$geo_path)
-  ][1] %||% geo_files[[1]]
+  direct_geo <- isTRUE(params$use_direct_paths) || isTRUE(params$use_direct_geo_path)
+  direct_rasters <- isTRUE(params$use_direct_paths) || isTRUE(params$use_direct_raster_path)
+
+  if (direct_geo) {
+    geo_primary <- normalizePath(params$geo_path, mustWork = TRUE)
+  } else {
+    dir.create(geo_dir, recursive = TRUE, showWarnings = FALSE)
+    geo_files <- copy_files_to_proxy(geo_bundle_files(params$geo_path), geo_dir)
+    geo_primary <- geo_files[
+      tolower(tools::file_ext(geo_files)) == tolower(tools::file_ext(params$geo_path)) &
+        basename(geo_files) == basename(params$geo_path)
+    ][1] %||% geo_files[[1]]
+  }
 
   raster_index <- raster_index_for_params(params)
-  raster_index$path <- copy_files_to_proxy(raster_index$path, raster_dir)
-  raster_index$file <- basename(raster_index$path)
+  if (direct_rasters) {
+    raster_index$path <- normalizePath(raster_index$path, mustWork = TRUE)
+    raster_folder <- normalizePath(params$raster_folder, mustWork = TRUE)
+  } else {
+    dir.create(raster_dir, recursive = TRUE, showWarnings = FALSE)
+    raster_index$path <- copy_files_to_proxy(raster_index$path, raster_dir)
+    raster_index$file <- basename(raster_index$path)
+    raster_folder <- normalizePath(raster_dir, mustWork = TRUE)
+  }
 
   params$geo_path <- normalizePath(geo_primary, mustWork = TRUE)
-  params$raster_folder <- normalizePath(raster_dir, mustWork = TRUE)
+  params$raster_folder <- raster_folder
   params$raster_index <- raster_index
   params
 }
@@ -778,11 +793,21 @@ run_land_analysis <- function(params, progress_file = NULL) {
     if (is.null(prepared_params)) {
       if (!is.null(metadata)) clear_proxy_contents(proxy_dir)
       dir.create(proxy_dir, recursive = TRUE, showWarnings = FALSE)
-      if (isTRUE(params$use_direct_paths)) {
+      direct_geo <- isTRUE(params$use_direct_paths) || isTRUE(params$use_direct_geo_path)
+      direct_rasters <- isTRUE(params$use_direct_paths) || isTRUE(params$use_direct_raster_path)
+      if (direct_geo && direct_rasters) {
         progress(3, "Proxy", "Usando caminhos locais diretamente; sem copiar entradas para o proxy.")
         params <- prepare_direct_inputs(params)
       } else {
-        progress(3, "Proxy", paste0("Copiando entradas para ", proxy_dir))
+        progress(
+          3,
+          "Proxy",
+          if (direct_rasters) {
+            "Preservando apenas o arquivo geoespacial no proxy; rasters serão lidos diretamente da pasta selecionada."
+          } else {
+            paste0("Copiando entradas para ", proxy_dir)
+          }
+        )
         params <- prepare_proxy_inputs(params, proxy_dir)
       }
       write_checkpoint(params, proxy_dir, "params")

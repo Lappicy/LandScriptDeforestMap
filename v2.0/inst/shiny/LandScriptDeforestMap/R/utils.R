@@ -758,50 +758,6 @@ stage_uploaded_vector <- function(upload, destination) {
   stage_vector_files(copied, destination, source = "upload")
 }
 
-stage_raster_upload <- function(upload, destination, progress = NULL) {
-  if (is.null(upload) || !nrow(upload)) {
-    stop("Selecione ou arraste os rasters classificados.", call. = FALSE)
-  }
-
-  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
-  copied <- file.path(destination, basename(upload$name))
-  total <- nrow(upload)
-  ok <- logical(total)
-  for (i in seq_len(total)) {
-    report_progress(
-      progress,
-      2 + ((i - 1) / total) * 10,
-      paste0("Copiando arquivo ", i, " de ", total),
-      basename(upload$name[[i]])
-    )
-    ok[[i]] <- file.copy(upload$datapath[[i]], copied[[i]], overwrite = TRUE)
-  }
-  if (!all(ok)) {
-    stop("Não foi possível preparar todos os rasters enviados.", call. = FALSE)
-  }
-
-  zip_files <- copied[tolower(tools::file_ext(copied)) == "zip"]
-  if (length(zip_files)) {
-    for (i in seq_along(zip_files)) {
-      report_progress(
-        progress,
-        12 + ((i - 1) / length(zip_files)) * 8,
-        paste0("Extraindo ZIP ", i, " de ", length(zip_files)),
-        basename(zip_files[[i]])
-      )
-      safe_extract_zip(
-        zip_files[[i]],
-        file.path(destination, paste0("zip_extracted_", i)),
-        max_files = 5000L,
-        max_uncompressed_bytes = 20 * 1024^3
-      )
-    }
-  }
-
-  report_progress(progress, 20, "Arquivos preparados", "Iniciando validação dos rasters.")
-  normalizePath(destination, mustWork = TRUE)
-}
-
 copy_upload_to_named_file <- function(upload, destination) {
   dir.create(destination, recursive = TRUE, showWarnings = FALSE)
   target <- file.path(destination, basename(upload$name[[1]]))
