@@ -266,20 +266,6 @@ body {
   background-color: var(--ls-accent) !important;
 }
 
-.local-vector-button {
-  margin: 0.25rem 0 0.65rem;
-  border-color: rgba(23, 107, 91, 0.35);
-  color: var(--ls-accent);
-  font-weight: 700;
-}
-
-.local-vector-button:hover,
-.local-vector-button:focus {
-  border-color: var(--ls-accent);
-  background: rgba(23, 107, 91, 0.08);
-  color: var(--ls-accent);
-}
-
 .raster-local-button {
   margin: 0 0 0.45rem;
   min-height: 2.9rem;
@@ -499,6 +485,12 @@ body {
   display: grid;
   gap: 0.2rem;
   margin: 1rem 0 0.45rem;
+}
+
+.processing-eta {
+  color: var(--ls-accent);
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
 .progress {

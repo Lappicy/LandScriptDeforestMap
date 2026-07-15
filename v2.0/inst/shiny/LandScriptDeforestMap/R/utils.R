@@ -313,6 +313,37 @@ report_progress <- function(progress, percent, stage, detail = NULL, status = "r
   }
 }
 
+estimate_remaining_processing_seconds <- function(
+  completed_raster_seconds,
+  remaining_rasters,
+  raster_safety_multiplier = 1.10,
+  postprocess_multiplier = 1
+) {
+  durations <- as.numeric(completed_raster_seconds)
+  durations <- durations[is.finite(durations) & durations > 0]
+  remaining_rasters <- suppressWarnings(as.integer(remaining_rasters))
+  if (!length(durations) || length(remaining_rasters) != 1L ||
+      !is.finite(remaining_rasters) || remaining_rasters < 0) {
+    return(NA_real_)
+  }
+
+  recent <- utils::tail(durations, min(3L, length(durations)))
+  representative <- max(mean(durations), mean(recent))
+  postprocess_seconds <- max(30, representative * postprocess_multiplier)
+  representative * remaining_rasters * raster_safety_multiplier + postprocess_seconds
+}
+
+format_processing_time <- function(seconds) {
+  seconds <- suppressWarnings(as.numeric(seconds))
+  if (length(seconds) != 1L || !is.finite(seconds) || seconds < 0) return(NULL)
+
+  minutes <- seconds / 60
+  if (minutes <= 59) {
+    return(paste0(formatC(minutes, format = "f", digits = 1, decimal.mark = ","), " min"))
+  }
+  paste0(formatC(minutes / 60, format = "f", digits = 1, decimal.mark = ","), " h")
+}
+
 normalize_raster_crs_signature <- function(crs) {
   gsub("[[:space:]]+", "", as.character(crs %||% ""))
 }
@@ -569,7 +600,15 @@ ensure_output_folder <- function(folder) {
   normalizePath(folder, mustWork = TRUE)
 }
 
-write_progress <- function(path, percent, stage, detail = NULL, status = "running") {
+write_progress <- function(
+  path,
+  percent,
+  stage,
+  detail = NULL,
+  status = "running",
+  eta_status = NULL,
+  eta_seconds = NULL
+) {
   payload <- list(
     percent = max(0, min(100, as.numeric(percent))),
     stage = as.character(stage),
@@ -577,6 +616,13 @@ write_progress <- function(path, percent, stage, detail = NULL, status = "runnin
     status = status,
     updated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   )
+  if (!is.null(eta_status)) payload$eta_status <- as.character(eta_status)
+  if (!is.null(eta_seconds)) {
+    eta_seconds <- suppressWarnings(as.numeric(eta_seconds))
+    if (length(eta_seconds) == 1L && is.finite(eta_seconds)) {
+      payload$eta_seconds <- max(0, eta_seconds)
+    }
+  }
   tmp <- paste0(path, ".tmp")
   jsonlite::write_json(payload, tmp, auto_unbox = TRUE, pretty = FALSE)
   moved <- file.rename(tmp, path)
@@ -676,9 +722,8 @@ complete_shapefile_bundle <- function(primary, destination, uploaded_files = cha
       zip = "Confira se o ZIP contém todos os componentes do shapefile.",
       upload = paste0(
         "No upload pelo navegador, o Shiny só recebe os arquivos selecionados. ",
-        "Para buscar os auxiliares automaticamente no mesmo diretório, use o botão ",
-        "'Selecionar arquivo local...'. Alternativamente, envie um .zip com todos ",
-        "os componentes ou selecione todos eles juntos."
+        "Envie um .zip com todos os componentes ou selecione o .shp, .shx, .dbf ",
+        "e .prj juntos."
       )
     )
     stop(
@@ -828,6 +873,193 @@ safe_extract_zip <- function(
   normalized
 }
 
+canonical_result_level <- function(source_name) {
+  normalize_one <- function(value) {
+    value <- iconv(as.character(value %||% ""), from = "", to = "ASCII//TRANSLIT")
+    value <- tolower(trimws(value))
+    value <- gsub("[^a-z0-9]+", "_", value)
+    value <- gsub("^_+|_+$", "", value)
+
+    aliases <- c(
+      grid = "grid",
+      grid_id = "grid",
+      quadrante = "grid",
+      quadricula = "grid",
+      mesh = "mesh",
+      malha = "mesh",
+      id_mesh = "mesh",
+      groups = "groups",
+      group = "groups",
+      grupos = "groups",
+      grupo = "groups",
+      groups_1 = "groups_1",
+      group_1 = "groups_1",
+      grupos_1 = "groups_1",
+      grupo_1 = "groups_1",
+      groups_2 = "groups_2",
+      group_2 = "groups_2",
+      grupos_2 = "groups_2",
+      grupo_2 = "groups_2",
+      total = "total"
+    )
+    matched <- unname(aliases[value])
+    if (!length(matched) || is.na(matched)) NA_character_ else matched
+  }
+
+  vapply(source_name, normalize_one, character(1), USE.NAMES = FALSE)
+}
+
+result_level_catalog <- function(files) {
+  empty <- data.frame(
+    level = character(),
+    path = character(),
+    source = character(),
+    spatial = logical(),
+    priority = integer(),
+    stringsAsFactors = FALSE
+  )
+  files <- unique(as.character(files %||% character()))
+  files <- files[file.exists(files)]
+  files <- files[!startsWith(basename(files), "._")]
+  if (!length(files)) return(empty)
+
+  entries <- lapply(files, function(path) {
+    extension <- tolower(tools::file_ext(path))
+    sources <- character()
+    spatial <- FALSE
+    priority <- 0L
+
+    if (identical(extension, "gpkg")) {
+      sources <- tryCatch(sf::st_layers(path)$name, error = function(e) character())
+      spatial <- TRUE
+      priority <- 30L
+    } else if (identical(extension, "xlsx") && requireNamespace("readxl", quietly = TRUE)) {
+      sources <- tryCatch(readxl::excel_sheets(path), error = function(e) character())
+      priority <- 20L
+    } else if (identical(extension, "rds")) {
+      sources <- tryCatch(names(readRDS(path)), error = function(e) character())
+      priority <- 10L
+    }
+    if (!length(sources)) return(NULL)
+
+    levels <- canonical_result_level(sources)
+    keep <- !is.na(levels)
+    if (!any(keep)) return(NULL)
+    data.frame(
+      level = levels[keep],
+      path = normalizePath(path, mustWork = TRUE),
+      source = sources[keep],
+      spatial = spatial,
+      priority = priority,
+      stringsAsFactors = FALSE
+    )
+  })
+  entries <- Filter(Negate(is.null), entries)
+  if (!length(entries)) return(empty)
+
+  catalog <- do.call(rbind, entries)
+  known_order <- c("grid", "mesh", "groups", "groups_1", "groups_2", "total")
+  catalog$order <- match(catalog$level, known_order)
+  catalog <- catalog[order(catalog$order, -catalog$priority), , drop = FALSE]
+  catalog <- catalog[!duplicated(catalog$level), , drop = FALSE]
+  catalog$order <- NULL
+  rownames(catalog) <- NULL
+  catalog
+}
+
+result_measure_columns <- function(data) {
+  data <- if (inherits(data, "sf")) sf::st_drop_geometry(data) else as.data.frame(data)
+  numeric_columns <- names(data)[vapply(data, is.numeric, logical(1))]
+  numeric_columns <- setdiff(numeric_columns, "Year")
+  variation_columns <- names(data)[grepl("^(Variation|Growth)_", names(data))]
+  base_columns <- sub("^(Variation|Growth)_", "", variation_columns)
+  fixed_columns <- c("Deforestation", "Reforestation")
+  measures <- intersect(
+    unique(c(variation_columns, base_columns, fixed_columns)),
+    numeric_columns
+  )
+
+  if (!length(measures)) {
+    measures <- setdiff(numeric_columns, c("Grid_ID", "ID_mesh"))
+  }
+  measures
+}
+
+result_group_columns <- function(data, level = NULL, known_group_columns = character()) {
+  data <- if (inherits(data, "sf")) sf::st_drop_geometry(data) else as.data.frame(data)
+  names_available <- names(data)
+  level <- canonical_result_level(level %||% "")[[1]]
+
+  if (identical(level, "grid") && "Grid_ID" %in% names_available) return("Grid_ID")
+  if (identical(level, "mesh") && "ID_mesh" %in% names_available) return("ID_mesh")
+  if (identical(level, "total")) return(character())
+
+  known <- intersect(as.character(known_group_columns %||% character()), names_available)
+  if (length(known) && level %in% c("groups", "groups_1", "groups_2")) {
+    if (identical(level, "groups_1")) return(known[[1]])
+    if (identical(level, "groups_2") && length(known) > 1L) return(known[[2]])
+    return(known)
+  }
+
+  excluded <- unique(c(
+    "Year", "AnalysisLevel", "Grid_ID", "ID_mesh", "BoundaryGroup",
+    result_measure_columns(data)
+  ))
+  candidates <- setdiff(names_available, excluded)
+  candidates <- candidates[!grepl("^(Variation|Growth)_", candidates)]
+
+  if (level %in% c("groups", "groups_1", "groups_2")) return(candidates)
+  unique(c(intersect(c("Grid_ID", "ID_mesh", "BoundaryGroup"), names_available), candidates))
+}
+
+prepare_chart_level_data <- function(data, level, known_group_columns = character()) {
+  table <- if (inherits(data, "sf")) sf::st_drop_geometry(data) else as.data.frame(data)
+  level <- canonical_result_level(level)[[1]]
+  grouping <- result_group_columns(table, level, known_group_columns)
+
+  if (length(grouping) > 1L) {
+    labels <- lapply(grouping, function(column) {
+      values <- as.character(table[[column]])
+      values[is.na(values) | !nzchar(trimws(values))] <- "Sem valor"
+      paste0(column, ": ", values)
+    })
+    table$.LandScriptChartGroup <- do.call(paste, c(labels, sep = " | "))
+    grouping <- ".LandScriptChartGroup"
+  } else if (!length(grouping)) {
+    grouping <- NULL
+  }
+
+  list(data = table, group = grouping)
+}
+
+chart_grouping_choices <- function(levels = character(), columns = character()) {
+  known_levels <- c("grid", "mesh", "groups", "groups_1", "groups_2", "total")
+  level_labels <- c(
+    grid = "Grid_ID",
+    mesh = "Malha (ID_mesh)",
+    groups = "Grupos",
+    groups_1 = "Grupos 1",
+    groups_2 = "Grupos 2",
+    total = "Total"
+  )
+  levels <- canonical_result_level(levels)
+  levels <- known_levels[known_levels %in% levels[!is.na(levels)]]
+  columns <- unique(as.character(columns %||% character()))
+  columns <- columns[!is.na(columns) & nzchar(columns)]
+
+  c(
+    "Sem agrupamento" = "__none__",
+    stats::setNames(
+      paste0("__level__:", levels),
+      paste0("Nível: ", unname(level_labels[levels]))
+    ),
+    stats::setNames(
+      paste0("__column__:", columns),
+      paste0("Coluna: ", columns)
+    )
+  )
+}
+
 select_preferred_result_file <- function(files) {
   files <- normalizePath(files[file.exists(files)], mustWork = TRUE)
   extensions <- tolower(tools::file_ext(files))
@@ -925,6 +1157,7 @@ prepare_result_download_zip <- function(result, destination) {
 
   wanted_keys <- c(
     "complete_xlsx",
+    intersect("run_summary", names(result$files)),
     names(result$files)[grepl("gpkg", names(result$files))]
   )
   wanted_keys <- unique(wanted_keys[nzchar(wanted_keys)])

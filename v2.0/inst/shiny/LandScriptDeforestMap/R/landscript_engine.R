@@ -269,7 +269,12 @@ aggregate_result_level <- function(
   }
 
   summary$AnalysisLevel <- level_name
-  sf::st_as_sf(summary, sf_column_name = "geometry", crs = sf::st_crs(geometry))
+  result <- sf::st_as_sf(summary, sf_column_name = "geometry", crs = sf::st_crs(geometry))
+  ensure_valid_polygon_geometry(
+    result,
+    context = paste0("nível de resultado ", level_name),
+    preserve_rows = TRUE
+  )
 }
 
 aggregate_boundary_geometry <- function(boundaries, by_columns) {
@@ -283,7 +288,12 @@ aggregate_boundary_geometry <- function(boundaries, by_columns) {
   out <- boundaries |>
     dplyr::group_by(dplyr::across(dplyr::all_of(by_columns))) |>
     dplyr::summarise(geometry = suppressMessages(suppressWarnings(sf::st_union(.data$geometry))), .groups = "drop")
-  sf::st_as_sf(out, sf_column_name = "geometry", crs = sf::st_crs(boundaries))
+  out <- sf::st_as_sf(out, sf_column_name = "geometry", crs = sf::st_crs(boundaries))
+  ensure_valid_polygon_geometry(
+    out,
+    context = "geometria agregada dos grupos",
+    preserve_rows = TRUE
+  )
 }
 
 aggregate_grid_result <- function(unit_table, mesh, value_columns) {
@@ -320,17 +330,31 @@ aggregate_grid_result <- function(unit_table, mesh, value_columns) {
       dplyr::group_by(.data$Grid_ID) |>
       dplyr::summarise(geometry = suppressMessages(suppressWarnings(sf::st_union(.data$geometry))), .groups = "drop")
   })
+  grid_geometry <- ensure_valid_polygon_geometry(
+    grid_geometry,
+    context = "geometria agregada de Grid_ID",
+    preserve_rows = TRUE
+  )
 
   summary <- dplyr::left_join(summary, grid_geometry, by = "Grid_ID")
   summary$AnalysisLevel <- "Quadrícula"
-  sf::st_as_sf(summary, sf_column_name = "geometry", crs = sf::st_crs(mesh))
+  result <- sf::st_as_sf(summary, sf_column_name = "geometry", crs = sf::st_crs(mesh))
+  ensure_valid_polygon_geometry(
+    result,
+    context = "nível de resultado Grid_ID",
+    preserve_rows = TRUE
+  )
 }
 
 write_result_layers <- function(path, layers) {
   if (file.exists(path)) unlink(path)
   first <- TRUE
   for (layer_name in names(layers)) {
-    object <- layers[[layer_name]]
+    object <- ensure_valid_polygon_geometry(
+      layers[[layer_name]],
+      context = paste0("camada ", layer_name, " antes da exportação"),
+      preserve_rows = TRUE
+    )
     sf::st_write(
       object,
       dsn = path,
@@ -405,6 +429,313 @@ write_result_workbook <- function(path, layers) {
     result_excel_sheets(layers),
     path
   )
+  normalizePath(path, mustWork = TRUE)
+}
+
+format_summary_duration <- function(seconds) {
+  seconds <- suppressWarnings(as.numeric(seconds %||% NA_real_))
+  if (length(seconds) != 1L || !is.finite(seconds) || seconds < 0) {
+    return("Não disponível")
+  }
+  seconds <- as.integer(round(seconds))
+  days <- seconds %/% 86400L
+  hours <- (seconds %% 86400L) %/% 3600L
+  minutes <- (seconds %% 3600L) %/% 60L
+  remaining_seconds <- seconds %% 60L
+  parts <- c(
+    if (days > 0L) paste0(days, " d") else character(),
+    if (hours > 0L) paste0(hours, " h") else character(),
+    if (minutes > 0L) paste0(minutes, " min") else character(),
+    if (remaining_seconds > 0L || !length(c(days, hours, minutes)[c(days, hours, minutes) > 0L])) {
+      paste0(remaining_seconds, " s")
+    } else {
+      character()
+    }
+  )
+  paste(parts, collapse = " ")
+}
+
+format_summary_number <- function(value, digits = 2L) {
+  value <- suppressWarnings(as.numeric(value %||% NA_real_))
+  if (length(value) != 1L || !is.finite(value)) return("Não disponível")
+  format(
+    round(value, digits),
+    big.mark = ".",
+    decimal.mark = ",",
+    nsmall = digits,
+    scientific = FALSE,
+    trim = TRUE
+  )
+}
+
+analysis_area_km2 <- function(boundaries) {
+  if (!inherits(boundaries, "sf") || !nrow(boundaries)) return(NA_real_)
+  tryCatch({
+    equal_area <- suppressWarnings(sf::st_transform(boundaries, 6933))
+    sum(as.numeric(sf::st_area(equal_area)), na.rm = TRUE) / 1e6
+  }, error = function(e) {
+    tryCatch(
+      sum(as.numeric(sf::st_area(boundaries)), na.rm = TRUE) / 1e6,
+      error = function(err) NA_real_
+    )
+  })
+}
+
+summary_crs_label <- function(spatial) {
+  crs <- tryCatch(sf::st_crs(spatial), error = function(e) NULL)
+  if (is.null(crs) || is.na(crs)) return("Não disponível")
+  if (!is.null(crs$epsg) && is.finite(crs$epsg)) return(paste0("EPSG:", crs$epsg))
+  crs$input %||% crs$Name %||% "CRS definido sem código EPSG"
+}
+
+summary_file_lines <- function(files) {
+  supplied_names <- names(files)
+  files <- as.character(files %||% character())
+  if (!is.null(supplied_names) && length(supplied_names) == length(files)) {
+    names(files) <- supplied_names
+  }
+  files <- files[!is.na(files) & nzchar(files) & file.exists(files)]
+  if (!length(files)) return("- Nenhum arquivo final encontrado")
+  info <- file.info(files)
+  labels <- names(files)
+  if (is.null(labels)) labels <- rep("arquivo", length(files))
+  labels[!nzchar(labels)] <- "arquivo"
+  lines <- vapply(seq_along(files), function(i) {
+    paste0(
+      "- ", labels[[i]], ": ", basename(files[[i]]),
+      " (", format_bytes(info$size[[i]]), ")"
+    )
+  }, character(1))
+  total_size <- sum(info$size, na.rm = TRUE)
+  c(lines, paste0("- Tamanho total dos arquivos listados: ", format_bytes(total_size)))
+}
+
+write_analysis_run_summary <- function(
+  path,
+  params,
+  layers,
+  mesh,
+  boundaries,
+  raster_index,
+  raster_timings,
+  group_columns,
+  summary_class_columns,
+  value_columns,
+  overlap_removed,
+  zone_cache,
+  output_files,
+  run_metadata = list(),
+  phase_seconds = list()
+) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  years <- sort(unique(as.integer(raster_index$year)))
+  years <- years[is.finite(years)]
+  report_groups <- setdiff(as.character(group_columns %||% character()), "BoundaryGroup")
+  mesh_table <- sf::st_drop_geometry(mesh)
+  mesh_count <- if ("ID_mesh" %in% names(mesh_table)) {
+    dplyr::n_distinct(mesh_table$ID_mesh)
+  } else {
+    nrow(mesh_table)
+  }
+  grid_count <- if ("Grid_ID" %in% names(mesh_table)) {
+    dplyr::n_distinct(mesh_table$Grid_ID)
+  } else {
+    NA_integer_
+  }
+  group_count <- if (length(report_groups) && all(report_groups %in% names(mesh_table))) {
+    nrow(unique(mesh_table[report_groups]))
+  } else {
+    1L
+  }
+
+  raster_timings <- as.data.frame(raster_timings %||% data.frame())
+  if (!all(c("file", "year", "seconds") %in% names(raster_timings))) {
+    raster_timings <- data.frame(file = character(), year = integer(), seconds = numeric())
+  }
+  raster_timings$seconds <- suppressWarnings(as.numeric(raster_timings$seconds))
+  raster_timings <- raster_timings[is.finite(raster_timings$seconds), , drop = FALSE]
+  raster_timings <- raster_timings[order(raster_timings$year, raster_timings$file), , drop = FALSE]
+  raster_total_seconds <- sum(raster_timings$seconds, na.rm = TRUE)
+
+  input_raster_size <- tryCatch(
+    sum(file.info(raster_index$path)$size, na.rm = TRUE),
+    error = function(e) NA_real_
+  )
+  raster_grid_count <- if ("grid_group" %in% names(raster_index)) {
+    length(unique(raster_index$grid_group))
+  } else {
+    NA_integer_
+  }
+  grids_aligned <- is.finite(raster_grid_count) && raster_grid_count == 1L
+  pixel_area <- suppressWarnings(as.numeric(params$pixel_km2_ratio %||% NA_real_))
+  study_area <- analysis_area_km2(boundaries)
+
+  run_started_at <- run_metadata$started_at %||% NA
+  run_finished_at <- run_metadata$finished_at %||% Sys.time()
+  original_started_at <- run_metadata$original_started_at %||% run_started_at
+  format_time <- function(value) {
+    if (!inherits(value, c("POSIXct", "POSIXt")) || is.na(value)) return("Não disponível")
+    format(value, "%Y-%m-%d %H:%M:%S %Z")
+  }
+
+  mesh_description <- if (isTRUE(params$no_mesh) || is.null(params$mesh_size)) {
+    "Não criada; os limites/grupos foram usados como unidades espaciais"
+  } else if (identical(params$mesh_unit %||% "degrees", "meters")) {
+    paste0(
+      format_summary_number(params$mesh_size / 1000, 3), " km (",
+      format_summary_number(params$mesh_size, 0), " m)"
+    )
+  } else {
+    paste0(format_summary_number(params$mesh_size, 6), " graus")
+  }
+
+  legend_description <- if (identical(params$mapbiomas, "none")) {
+    "Sem legenda; classes originais preservadas"
+  } else if (identical(params$mapbiomas, "custom")) {
+    "Personalizada"
+  } else {
+    paste0("MapBiomas - Coleção ", params$mapbiomas)
+  }
+  class_mapping <- tryCatch(
+    mapbiomas_class_map(params$mapbiomas, params$custom_classes),
+    error = function(e) list()
+  )
+  class_lines <- if (length(class_mapping)) {
+    vapply(names(class_mapping), function(class_name) {
+      paste0("- ", class_name, ": ", paste(class_mapping[[class_name]], collapse = ", "))
+    }, character(1))
+  } else {
+    "- Nenhuma agregação de classes aplicada"
+  }
+
+  layer_lines <- vapply(names(layers), function(layer_name) {
+    object <- layers[[layer_name]]
+    paste0(
+      "- ", layer_name, ": ",
+      format(nrow(object), big.mark = ".", decimal.mark = ","), " registros"
+    )
+  }, character(1))
+
+  reduction <- if (!is.null(zone_cache) && zone_cache$source_cells > 0) {
+    100 * (1 - zone_cache$processed_cells / zone_cache$source_cells)
+  } else {
+    NA_real_
+  }
+  phase_labels <- c(
+    setup = "Preparação inicial",
+    geometry = "Geometria e criação da malha",
+    rasters = "Etapa de rasters nesta sessão",
+    postprocess = "Conversão, classes e agregações",
+    export = "Exportação dos resultados"
+  )
+  phase_lines <- vapply(names(phase_labels), function(name) {
+    paste0("- ", phase_labels[[name]], ": ", format_summary_duration(phase_seconds[[name]] %||% NA_real_))
+  }, character(1))
+
+  timing_lines <- if (nrow(raster_timings)) {
+    c(
+      paste0("- Rasters com tempo registrado: ", nrow(raster_timings)),
+      paste0("- Tempo acumulado dos rasters: ", format_summary_duration(raster_total_seconds)),
+      paste0("- Tempo médio por raster: ", format_summary_duration(mean(raster_timings$seconds))),
+      paste0("- Mediana por raster: ", format_summary_duration(stats::median(raster_timings$seconds))),
+      paste0("- Raster mais rápido: ", format_summary_duration(min(raster_timings$seconds))),
+      paste0("- Raster mais lento: ", format_summary_duration(max(raster_timings$seconds)))
+    )
+  } else {
+    "- Tempos individuais dos rasters não disponíveis"
+  }
+  per_raster_lines <- if (nrow(raster_timings)) {
+    vapply(seq_len(nrow(raster_timings)), function(i) {
+      paste0(
+        "- ", raster_timings$year[[i]], " | ", raster_timings$file[[i]],
+        " | ", format_summary_duration(raster_timings$seconds[[i]])
+      )
+    }, character(1))
+  } else {
+    "- Nenhum tempo individual registrado"
+  }
+
+  package_version <- tryCatch(
+    as.character(utils::packageVersion("LandScriptDeforestMap")),
+    error = function(e) "2.0.0"
+  )
+  total_wall_seconds <- tryCatch(
+    as.numeric(difftime(run_finished_at, original_started_at, units = "secs")),
+    error = function(e) NA_real_
+  )
+
+  lines <- c(
+    "LandScriptDeforestMap - Resumo da execução",
+    paste(rep("=", 44), collapse = ""),
+    "",
+    "1. Identificação e reprodutibilidade",
+    paste0("- Status: Concluída com sucesso"),
+    paste0("- Nome da saída: ", params$output_name),
+    paste0("- Pasta de saída: ", params$output_folder),
+    paste0("- Versão do LandScriptDeforestMap: ", package_version),
+    paste0("- Versão do R: ", R.version.string),
+    paste0("- Sistema: ", R.version$platform),
+    paste0("- Início desta sessão: ", format_time(run_started_at)),
+    paste0("- Término: ", format_time(run_finished_at)),
+    paste0("- Execução retomada de checkpoints: ", if (isTRUE(run_metadata$resumed)) "Sim" else "Não"),
+    paste0("- Duração desta sessão: ", format_summary_duration(run_metadata$total_seconds)),
+    if (isTRUE(run_metadata$resumed)) {
+      paste0("- Tempo de calendário desde o início original: ", format_summary_duration(total_wall_seconds), " (pode incluir períodos em que o processo ficou parado)")
+    } else {
+      character()
+    },
+    "",
+    "2. Entradas",
+    paste0("- Arquivo geoespacial: ", basename(params$geo_path %||% "Não disponível")),
+    paste0("- CRS da análise/saída: ", summary_crs_label(mesh)),
+    paste0("- Pasta dos rasters: ", params$raster_folder %||% "Não disponível"),
+    paste0("- Quantidade de rasters: ", nrow(raster_index)),
+    paste0("- Quantidade de anos: ", length(years)),
+    paste0("- Intervalo temporal: ", if (length(years)) paste0(min(years), "–", max(years)) else "Não disponível"),
+    paste0("- Anos: ", if (length(years)) paste(years, collapse = ", ") else "Não disponível"),
+    paste0("- Tamanho total dos rasters de entrada: ", if (is.finite(input_raster_size)) format_bytes(input_raster_size) else "Não disponível"),
+    paste0("- Grades dos rasters alinhadas: ", if (!is.finite(raster_grid_count)) "Não disponível" else if (grids_aligned) "Sim" else "Não"),
+    paste0("- Quantidade de grades distintas: ", if (is.finite(raster_grid_count)) raster_grid_count else "Não disponível"),
+    paste0("- Área de pixel utilizada: ", format_summary_number(pixel_area, 10), " km²"),
+    "",
+    "3. Configuração espacial",
+    paste0("- Área processada: ", format_summary_number(study_area, 3), " km²"),
+    paste0("- Tamanho da malha: ", mesh_description),
+    paste0("- Quadrículas Grid_ID: ", if (is.finite(grid_count)) format(grid_count, big.mark = ".", decimal.mark = ",") else "Não disponível"),
+    paste0("- Unidades ID_mesh após recortes por limites: ", format(mesh_count, big.mark = ".", decimal.mark = ",")),
+    paste0("- Colunas de agrupamento: ", if (length(report_groups)) paste(report_groups, collapse = ", ") else "Nenhuma; área total"),
+    paste0("- Combinações espaciais de grupos: ", format(group_count, big.mark = ".", decimal.mark = ",")),
+    paste0("- Sobreposições entre grupos removidas: ", if (isTRUE(overlap_removed)) "Sim" else "Não"),
+    paste0("- Validação geométrica antes da exportação: Concluída"),
+    "",
+    "4. Classes",
+    paste0("- Legenda: ", legend_description),
+    paste0("- Classes originais encontradas: ", length(setdiff(value_columns, summary_class_columns))),
+    paste0("- Classes agregadas: ", if (length(summary_class_columns)) paste(summary_class_columns, collapse = ", ") else "Nenhuma"),
+    class_lines,
+    "",
+    "5. Desempenho",
+    phase_lines,
+    timing_lines,
+    paste0("- Rasterizações da malha executadas nesta sessão: ", zone_cache$rasterizations %||% 0L),
+    paste0("- Reutilizações de rasterização nesta sessão: ", zone_cache$zone_cache_hits %||% 0L),
+    paste0("- Redução de células pelo recorte nesta sessão: ", if (is.finite(reduction)) paste0(format_summary_number(max(0, reduction), 1), "%") else "Não disponível"),
+    "",
+    "6. Tempo por raster",
+    "Ano | Arquivo | Tempo",
+    per_raster_lines,
+    "",
+    "7. Estrutura dos resultados",
+    layer_lines,
+    "",
+    "8. Arquivos produzidos",
+    summary_file_lines(output_files),
+    "",
+    "Observação: os tempos podem variar conforme CPU, memória, velocidade do disco e complexidade geométrica. Em execuções retomadas, os tempos por raster são acumulados a partir dos checkpoints.",
+    ""
+  )
+
+  writeLines(enc2utf8(lines), path, useBytes = TRUE)
   normalizePath(path, mustWork = TRUE)
 }
 
@@ -756,10 +1087,48 @@ read_analysis_job_result <- function(path, lazy = FALSE) {
 }
 
 run_land_analysis <- function(params, progress_file = NULL) {
+  run_started_at <- Sys.time()
+  run_elapsed_started <- unname(proc.time()[["elapsed"]])
+  elapsed_now <- function() unname(proc.time()[["elapsed"]])
+  phase_seconds <- list()
+  resume_requested <- isTRUE(params$resume_proxy)
+  resumed_from_checkpoints <- FALSE
+  original_started_at <- run_started_at
+
+  eta_state <- new.env(parent = emptyenv())
+  eta_state$status <- "evaluating"
+  eta_state$seconds <- NA_real_
+  eta_state$postprocess_seconds <- NA_real_
+
   progress <- function(percent, stage, detail = NULL, status = "running") {
     if (!is.null(progress_file)) {
-      write_progress(progress_file, percent, stage, detail, status)
+      write_progress(
+        progress_file,
+        percent,
+        stage,
+        detail,
+        status,
+        eta_status = eta_state$status,
+        eta_seconds = eta_state$seconds
+      )
     }
+  }
+
+  update_raster_eta <- function(durations, remaining_rasters) {
+    estimate <- estimate_remaining_processing_seconds(durations, remaining_rasters)
+    if (!is.finite(estimate)) return(invisible(NULL))
+    eta_state$status <- "estimated"
+    eta_state$seconds <- estimate
+    eta_state$postprocess_seconds <- estimate_remaining_processing_seconds(durations, 0L)
+    invisible(estimate)
+  }
+
+  update_postprocess_eta <- function(fraction_remaining) {
+    budget <- eta_state$postprocess_seconds
+    if (!is.finite(budget)) return(invisible(NULL))
+    eta_state$status <- "estimated"
+    eta_state$seconds <- max(0, budget * max(0, min(1, fraction_remaining)))
+    invisible(eta_state$seconds)
   }
 
   progress(2, "Validação", "Conferindo arquivos e parâmetros")
@@ -772,12 +1141,16 @@ run_land_analysis <- function(params, progress_file = NULL) {
 
   prepared_params <- NULL
   metadata <- read_checkpoint(proxy_dir, "metadata")
+  if (!is.null(metadata$created_at) && inherits(metadata$created_at, c("POSIXct", "POSIXt"))) {
+    original_started_at <- metadata$created_at
+  }
   if (isTRUE(params$resume_proxy)) {
     prepared_params <- read_checkpoint(proxy_dir, "params")
     if (is.null(prepared_params)) {
       stop("Não há parâmetros salvos na pasta proxy para retomar a análise.", call. = FALSE)
     }
     params <- prepared_params
+    resumed_from_checkpoints <- TRUE
     output_folder <- params$output_folder
     output_name <- params$output_name
     progress(3, "Retomada", paste0("Usando pasta proxy: ", proxy_dir))
@@ -787,6 +1160,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
       prepared_params <- read_checkpoint(proxy_dir, "params")
       if (!is.null(prepared_params)) {
         params <- prepared_params
+        resumed_from_checkpoints <- TRUE
         progress(3, "Retomada", paste0("Checkpoints encontrados em ", proxy_dir))
       }
     }
@@ -811,15 +1185,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
         params <- prepare_proxy_inputs(params, proxy_dir)
       }
       write_checkpoint(params, proxy_dir, "params")
-      write_checkpoint(
-        list(
-          fingerprint = current_fingerprint,
-          created_at = Sys.time(),
-          proxy_dir = proxy_dir
-        ),
-        proxy_dir,
-        "metadata"
+      metadata <- list(
+        fingerprint = current_fingerprint,
+        created_at = run_started_at,
+        proxy_dir = proxy_dir
       )
+      original_started_at <- metadata$created_at
+      write_checkpoint(metadata, proxy_dir, "metadata")
     }
   }
 
@@ -841,10 +1213,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
   }
 
   raster_index <- raster_index_for_params(params)
+  phase_seconds$setup <- elapsed_now() - run_elapsed_started
+  geometry_started_elapsed <- elapsed_now()
 
   progress(6, "Leitura", "Abrindo e validando o arquivo geoespacial")
   mesh_checkpoint <- read_checkpoint(proxy_dir, "mesh")
   if (!is.null(mesh_checkpoint)) {
+    resumed_from_checkpoints <- TRUE
     progress(14, "Retomada", "Usando limites e malha salvos na pasta proxy.")
     boundaries <- mesh_checkpoint$boundaries
     group_columns <- mesh_checkpoint$group_columns %||% mesh_checkpoint$group_column
@@ -909,10 +1284,49 @@ run_land_analysis <- function(params, progress_file = NULL) {
     )
   }
 
+  phase_seconds$geometry <- elapsed_now() - geometry_started_elapsed
+  raster_phase_started_elapsed <- elapsed_now()
+
   zone_cache <- new_zonal_cache()
   all_counts <- vector("list", nrow(raster_index))
   counts_dir <- file.path(proxy_dir, "raster_counts")
   dir.create(counts_dir, recursive = TRUE, showWarnings = FALSE)
+  raster_durations <- numeric()
+  raster_timings <- read_checkpoint(proxy_dir, "raster_timings")
+  if (!is.data.frame(raster_timings) ||
+      !all(c("file", "year", "seconds") %in% names(raster_timings))) {
+    raster_timings <- data.frame(
+      file = character(),
+      year = integer(),
+      seconds = numeric(),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  record_raster_timing <- function(file, year, seconds) {
+    key_match <- raster_timings$file == file & raster_timings$year == year
+    row <- data.frame(
+      file = as.character(file),
+      year = as.integer(year),
+      seconds = as.numeric(seconds),
+      stringsAsFactors = FALSE
+    )
+    if (any(key_match)) {
+      raster_timings[key_match, ] <<- row[rep(1L, sum(key_match)), , drop = FALSE]
+    } else {
+      raster_timings <<- rbind(raster_timings, row)
+    }
+    write_checkpoint(raster_timings, proxy_dir, "raster_timings")
+    invisible(seconds)
+  }
+
+  saved_raster_timing <- function(file, year) {
+    match_row <- which(raster_timings$file == file & raster_timings$year == year)
+    if (!length(match_row)) return(NA_real_)
+    value <- suppressWarnings(as.numeric(raster_timings$seconds[[match_row[[1]]]]))
+    if (is.finite(value) && value > 0) value else NA_real_
+  }
+
   for (i in seq_len(nrow(raster_index))) {
     pct <- 15 + 55 * (i - 1) / max(1, nrow(raster_index))
     count_checkpoint <- file.path(
@@ -922,7 +1336,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
     if (file.exists(count_checkpoint)) {
       saved_count <- tryCatch(readRDS(count_checkpoint), error = function(e) NULL)
       if (!is.null(saved_count)) {
+        resumed_from_checkpoints <- TRUE
         all_counts[[i]] <- saved_count
+        saved_seconds <- saved_raster_timing(raster_index$file[[i]], raster_index$year[[i]])
+        if (is.finite(saved_seconds)) {
+          raster_durations <- c(raster_durations, saved_seconds)
+          update_raster_eta(raster_durations, nrow(raster_index) - i)
+        }
         progress(
           pct,
           paste0("Raster ", i, " de ", nrow(raster_index)),
@@ -950,6 +1370,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
         }
       )
     )
+    raster_started_at <- unname(proc.time()[["elapsed"]])
     all_counts[[i]] <- extract_zonal_counts(
       raster_index$path[[i]],
       mesh,
@@ -958,8 +1379,21 @@ run_land_analysis <- function(params, progress_file = NULL) {
       cache_key = cache_key
     )
     saveRDS(all_counts[[i]], count_checkpoint)
+    raster_seconds <- max(0.01, unname(proc.time()[["elapsed"]]) - raster_started_at)
+    raster_durations <- c(raster_durations, raster_seconds)
+    record_raster_timing(raster_index$file[[i]], raster_index$year[[i]], raster_seconds)
+    update_raster_eta(raster_durations, nrow(raster_index) - i)
+    progress(
+      15 + 55 * i / max(1, nrow(raster_index)),
+      paste0("Raster ", i, " de ", nrow(raster_index)),
+      paste0("Concluído: ", raster_index$year[[i]], " — ", raster_index$file[[i]])
+    )
   }
 
+  phase_seconds$rasters <- elapsed_now() - raster_phase_started_elapsed
+  postprocess_started_elapsed <- elapsed_now()
+
+  update_postprocess_eta(1)
   if (zone_cache$source_cells > 0) {
     reduction <- 100 * (1 - zone_cache$processed_cells / zone_cache$source_cells)
     progress(
@@ -975,6 +1409,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
     )
   }
 
+  update_postprocess_eta(0.95)
   progress(71, "Conversão", "Combinando anos e convertendo pixels para km²")
   counts <- dplyr::bind_rows(all_counts)
   raw_class_columns <- names(counts)[!is.na(suppressWarnings(as.numeric(names(counts))))]
@@ -990,10 +1425,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
   }
 
   if (identical(params$mapbiomas, "none")) {
+    update_postprocess_eta(0.78)
     progress(78, "Classes", "Mantendo as classes originais dos rasters")
   } else if (identical(params$mapbiomas, "custom")) {
+    update_postprocess_eta(0.78)
     progress(78, "Classes", "Aplicando a legenda personalizada")
   } else {
+    update_postprocess_eta(0.78)
     progress(78, "Classes", paste0("Aplicando a legenda MapBiomas Coleção ", params$mapbiomas))
   }
   unit_table <- count.classes(
@@ -1004,6 +1442,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
   summary_class_columns <- attr(unit_table, "summary_class_columns")
   value_columns <- c(raw_class_columns, summary_class_columns)
 
+  update_postprocess_eta(0.58)
   progress(84, "Variações", "Calculando variações anuais por unidade espacial")
   unit_table <- add_variations(
     unit_table,
@@ -1014,6 +1453,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
   unit_results <- dplyr::left_join(unit_table, mesh[, c("ID_mesh", "geometry")], by = "ID_mesh")
   unit_results <- sf::st_as_sf(unit_results, sf_column_name = "geometry", crs = sf::st_crs(mesh))
 
+  update_postprocess_eta(0.42)
   progress(89, "Agregação", "Gerando resultados por quadrícula, grupo e área total")
   grid_results <- aggregate_grid_result(
     unit_table,
@@ -1055,6 +1495,9 @@ run_land_analysis <- function(params, progress_file = NULL) {
     level_name = "Total"
   )
 
+  update_postprocess_eta(0.25)
+  phase_seconds$postprocess <- elapsed_now() - postprocess_started_elapsed
+  export_started_elapsed <- elapsed_now()
   progress(94, "Exportação", "Salvando tabelas e GeoPackages")
   layers <- c(
     list(grid = grid_results, mesh = unit_results, groups = group_results),
@@ -1065,6 +1508,7 @@ run_land_analysis <- function(params, progress_file = NULL) {
 
   complete_txt <- file.path(output_folder, paste0(output_name, ".txt"))
   complete_xlsx <- file.path(output_folder, paste0(output_name, ".xlsx"))
+  run_summary_txt <- file.path(output_folder, paste0(output_name, "_ResumoExecucao.txt"))
   pixels_txt <- file.path(output_folder, paste0(output_name, "_CalcRasterPixels.txt"))
   result_rds <- file.path(output_folder, paste0(output_name, ".rds"))
 
@@ -1099,10 +1543,44 @@ run_land_analysis <- function(params, progress_file = NULL) {
       complete_xlsx = normalizePath(complete_xlsx),
       gpkg_files,
       pixel_counts = normalizePath(pixels_txt),
+      run_summary = normalizePath(run_summary_txt, mustWork = FALSE),
       result_rds = normalizePath(result_rds, mustWork = FALSE)
     )
   )
   save_rds_atomic(result, result_rds)
+  phase_seconds$export <- elapsed_now() - export_started_elapsed
+  run_finished_at <- Sys.time()
+  run_total_seconds <- elapsed_now() - run_elapsed_started
+  summary_output_files <- c(
+    complete_table = normalizePath(complete_txt),
+    complete_xlsx = normalizePath(complete_xlsx),
+    gpkg_files,
+    pixel_counts = normalizePath(pixels_txt),
+    internal_result = normalizePath(result_rds)
+  )
+  write_analysis_run_summary(
+    path = run_summary_txt,
+    params = params,
+    layers = layers,
+    mesh = mesh,
+    boundaries = boundaries,
+    raster_index = raster_index,
+    raster_timings = raster_timings,
+    group_columns = group_columns,
+    summary_class_columns = summary_class_columns,
+    value_columns = value_columns,
+    overlap_removed = overlap_removed,
+    zone_cache = zone_cache,
+    output_files = summary_output_files,
+    run_metadata = list(
+      started_at = run_started_at,
+      finished_at = run_finished_at,
+      original_started_at = original_started_at,
+      resumed = isTRUE(resume_requested) || isTRUE(resumed_from_checkpoints),
+      total_seconds = run_total_seconds
+    ),
+    phase_seconds = phase_seconds
+  )
   write_checkpoint(
     list(
       files = result$files,
@@ -1112,8 +1590,11 @@ run_land_analysis <- function(params, progress_file = NULL) {
     "result"
   )
 
+  update_postprocess_eta(0.05)
   progress(99, "Limpeza", "Removendo pasta proxy temporária.")
   safe_unlink(proxy_dir)
+  eta_state$status <- "complete"
+  eta_state$seconds <- 0
   progress(100, "Concluído", "Análise finalizada e arquivos exportados.", "complete")
   result
 }

@@ -189,7 +189,7 @@ build_timeseries_plot <- function(
 
   if (!is.null(different.group) && nzchar(different.group) &&
       different.group %in% names(long)) {
-    plot <- plot + ggplot2::facet_wrap(stats::as.formula(paste("~", different.group)), scales = "free_y")
+    plot <- plot + ggplot2::facet_wrap(stats::reformulate(different.group), scales = "free_y")
   }
   plot
 }
@@ -286,7 +286,13 @@ mesh.map <- function(
       geometry = sf::st_sfc(map_geometry, crs = sf::st_crs(data))
     )
   }
-  if (exists("repair_polygon_geometry", mode = "function")) {
+  if (exists("ensure_valid_polygon_geometry", mode = "function")) {
+    map_data <- ensure_valid_polygon_geometry(
+      map_data,
+      context = "dados do mapa",
+      preserve_rows = TRUE
+    )
+  } else if (exists("repair_polygon_geometry", mode = "function")) {
     map_data <- repair_polygon_geometry(map_data)
   }
 
@@ -330,10 +336,22 @@ mesh.map <- function(
   legend_seed <- map_data[rep(1L, length(labels)), , drop = FALSE]
   legend_seed$.MapClass <- factor(labels, levels = labels)
 
+  outline_geometry <- if (exists("safe_st_union", mode = "function")) {
+    safe_st_union(sf::st_geometry(map_data))
+  } else {
+    suppressMessages(suppressWarnings(sf::st_union(sf::st_geometry(map_data))))
+  }
   outline <- sf::st_sf(geometry = sf::st_sfc(
-    suppressWarnings(sf::st_union(sf::st_geometry(map_data))),
+    outline_geometry,
     crs = sf::st_crs(map_data)
   ))
+  if (exists("ensure_valid_polygon_geometry", mode = "function")) {
+    outline <- ensure_valid_polygon_geometry(
+      outline,
+      context = "contorno do mapa",
+      preserve_rows = TRUE
+    )
+  }
 
   plot <- ggplot2::ggplot()
 
@@ -438,6 +456,12 @@ mesh.map <- function(
 }
 
 plot_candidate_columns <- function(data) {
+  if (exists("result_measure_columns", mode = "function")) {
+    return(result_measure_columns(data))
+  }
   data <- if (inherits(data, "sf")) sf::st_drop_geometry(data) else data
-  names(data)[vapply(data, is.numeric, logical(1)) & names(data) != "Year"]
+  setdiff(
+    names(data)[vapply(data, is.numeric, logical(1))],
+    c("Year", "Grid_ID", "ID_mesh")
+  )
 }

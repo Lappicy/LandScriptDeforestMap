@@ -1,5 +1,5 @@
 drop_zm_geometry <- function(geo) {
-  if (!inherits(geo, "sf")) return(geo)
+  if (!inherits(geo, c("sf", "sfc", "sfg"))) return(geo)
   tryCatch(
     sf::st_zm(geo, drop = TRUE, what = "ZM"),
     error = function(e) geo
@@ -10,10 +10,51 @@ repair_polygon_geometry <- function(geo) {
   if (!inherits(geo, c("sf", "sfc", "sfg"))) return(geo)
   if (inherits(geo, "sfg")) geo <- sf::st_sfc(geo)
 
+  initial_validity <- tryCatch(
+    suppressWarnings(sf::st_is_valid(geo)),
+    error = function(e) rep(FALSE, length(sf::st_geometry(geo)))
+  )
+  initial_empty <- tryCatch(
+    sf::st_is_empty(geo),
+    error = function(e) rep(FALSE, length(initial_validity))
+  )
+  initial_types <- tryCatch(
+    as.character(sf::st_geometry_type(geo)),
+    error = function(e) character()
+  )
+  if (
+    length(initial_validity) &&
+    all(initial_validity & !is.na(initial_validity)) &&
+    !any(initial_empty) &&
+    length(initial_types) == length(initial_validity) &&
+    all(initial_types %in% c("POLYGON", "MULTIPOLYGON"))
+  ) {
+    return(drop_zm_geometry(geo))
+  }
+
   repaired <- tryCatch(
     suppressWarnings(sf::st_make_valid(geo)),
     error = function(e) geo
   )
+
+  # s2 can occasionally keep a spherical self-crossing after st_union() or a
+  # reprojection, even though the same polygon is repairable by GEOS. Run a
+  # planar validity pass only for the remaining invalid features, then return
+  # to the caller's original s2 setting.
+  validity <- tryCatch(
+    suppressWarnings(sf::st_is_valid(repaired)),
+    error = function(e) rep(FALSE, length(sf::st_geometry(repaired)))
+  )
+  if (any(!validity | is.na(validity))) {
+    previous_s2 <- sf::sf_use_s2()
+    suppressMessages(sf::sf_use_s2(FALSE))
+    repaired <- tryCatch(
+      suppressWarnings(sf::st_make_valid(repaired)),
+      error = function(e) repaired
+    )
+    suppressMessages(sf::sf_use_s2(previous_s2))
+  }
+
   repaired <- tryCatch(
     suppressWarnings(sf::st_collection_extract(repaired, "POLYGON")),
     error = function(e) repaired
@@ -29,6 +70,27 @@ repair_polygon_geometry <- function(geo) {
     if (any(empty)) repaired <- repaired[!empty]
   }
 
+  repaired
+}
+
+ensure_valid_polygon_geometry <- function(geo, context = "resultado", preserve_rows = TRUE) {
+  original_rows <- if (inherits(geo, "sf")) nrow(geo) else length(geo)
+  repaired <- repair_polygon_geometry(geo)
+  repaired_rows <- if (inherits(repaired, "sf")) nrow(repaired) else length(repaired)
+  if (isTRUE(preserve_rows) && !identical(original_rows, repaired_rows)) {
+    stop(
+      "A correção da geometria alteraria o número de registros em ", context, ".",
+      call. = FALSE
+    )
+  }
+
+  validity <- tryCatch(
+    suppressWarnings(sf::st_is_valid(repaired)),
+    error = function(e) rep(FALSE, repaired_rows)
+  )
+  if (length(validity) != repaired_rows || any(!validity | is.na(validity))) {
+    stop("Não foi possível produzir geometrias válidas em ", context, ".", call. = FALSE)
+  }
   repaired
 }
 
@@ -717,6 +779,7 @@ create.mesh <- function(
   if (identical(mesh.unit, "meters")) {
     mesh <- sf::st_transform(mesh, original_crs)
   }
+  mesh <- ensure_valid_polygon_geometry(mesh, "malha", preserve_rows = FALSE)
   mesh <- drop_zm_geometry(mesh)
   mesh$ID_mesh <- seq_len(nrow(mesh))
   for (column in group.columns) {

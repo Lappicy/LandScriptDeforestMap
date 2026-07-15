@@ -34,14 +34,6 @@ analysis_ui <- function(id) {
               placeholder = "Inserir o arquivo .gpkg, .shp, .zip, ou .json"
             )
           ),
-          shinyFiles::shinyFilesButton(
-            ns("geo_local_select"),
-            "Selecionar arquivo local...",
-            "Escolha um GeoPackage, shapefile, GeoJSON ou ZIP",
-            multiple = FALSE,
-            class = "btn-outline-primary w-100 local-vector-button",
-            icon = shiny::icon("folder-open")
-          ),
           shiny::uiOutput(ns("geo_validation_message")),
           shiny::selectizeInput(
             ns("group_column"),
@@ -215,7 +207,6 @@ analysis_server <- function(id) {
     dir.create(session_dir, recursive = TRUE)
 
     geo_path <- shiny::reactiveVal(NULL)
-    geo_source_is_local <- shiny::reactiveVal(FALSE)
     geo_data <- shiny::reactiveVal(NULL)
     geo_preview <- shiny::reactiveVal(NULL)
     geo_invalid_geometry <- shiny::reactiveVal(FALSE)
@@ -261,14 +252,6 @@ analysis_server <- function(id) {
     if (!length(output_folder_roots)) {
       output_folder_roots <- c("Projeto" = normalizePath(getwd(), mustWork = FALSE))
     }
-
-    shinyFiles::shinyFileChoose(
-      input,
-      "geo_local_select",
-      roots = output_folder_roots,
-      session = session,
-      filetypes = unique(c("zip", supported_vector_extensions(), shapefile_extensions()))
-    )
 
     shinyFiles::shinyDirChoose(
       input,
@@ -407,7 +390,6 @@ analysis_server <- function(id) {
     mark_invalid_geospatial_file <- function(clear_preview = TRUE) {
       if (isTRUE(clear_preview)) {
         geo_path(NULL)
-        geo_source_is_local(FALSE)
         geo_preview(NULL)
         shiny::updateSelectizeInput(session, "group_column", choices = NULL, selected = character(), server = TRUE)
       }
@@ -867,53 +849,6 @@ analysis_server <- function(id) {
       )
     })
 
-    shiny::observeEvent(input$geo_local_select, {
-      selected <- shinyFiles::parseFilePaths(output_folder_roots, input$geo_local_select)
-      if (is.null(selected) || !nrow(selected)) return(NULL)
-      selected_path <- selected$datapath[[1]]
-      if (is.null(selected_path) || !nzchar(selected_path) || !file.exists(selected_path)) return(NULL)
-
-      token <- geo_validation_token() + 1L
-      geo_validation_token(token)
-      stop_geospatial_validation_process()
-      geo_path(NULL)
-      geo_source_is_local(!identical(tolower(tools::file_ext(selected_path)), "zip"))
-      geo_data(NULL)
-      geo_preview(NULL)
-      validated_geo_rds(NULL)
-      geo_invalid_geometry(FALSE)
-      validation_state(NULL)
-      set_geo_validation_progress(1, "Recebendo arquivo", "Preparando arquivo local selecionado.")
-      toggle_run_button(TRUE)
-
-      source_label <- basename(selected_path)
-      later::later(function() {
-        if (!identical(token, shiny::isolate(geo_validation_token()))) return(NULL)
-        tryCatch({
-          set_geo_validation_progress(2, "Preparando arquivo", "Buscando arquivos auxiliares no mesmo diretório.")
-          path <- if (tolower(tools::file_ext(selected_path)) == "zip") {
-            upload_dir <- file.path(session_dir, paste0("geo_", as.integer(Sys.time())))
-            stage_local_vector(selected_path, upload_dir)
-          } else {
-            normalizePath(selected_path, mustWork = TRUE)
-          }
-          load_geospatial_file(path, source_label, token)
-        }, error = function(e) {
-          if (identical(conditionMessage(e), invalid_geometry_message())) {
-            mark_invalid_geospatial_file()
-          } else {
-            geo_path(NULL)
-            geo_data(NULL)
-            geo_preview(NULL)
-            geo_invalid_geometry(FALSE)
-            geo_validation_state(list(status = "error", type = "danger", text = conditionMessage(e)))
-            validation_state(list(type = "danger", text = conditionMessage(e)))
-            if (!isTRUE(shiny::isolate(running()))) toggle_run_button(TRUE)
-          }
-        })
-      }, delay = 0.05)
-    }, ignoreInit = TRUE)
-
     shiny::observeEvent(input$geo_upload, {
       upload <- input$geo_upload
       if (is.null(upload) || !nrow(upload)) return(NULL)
@@ -921,7 +856,6 @@ analysis_server <- function(id) {
       geo_validation_token(token)
       stop_geospatial_validation_process()
       geo_path(NULL)
-      geo_source_is_local(FALSE)
       geo_data(NULL)
       geo_preview(NULL)
       validated_geo_rds(NULL)
@@ -1465,10 +1399,9 @@ analysis_server <- function(id) {
           raster_index = if (resume_proxy) NULL else validated$rasters,
           validated_geo_rds = if (resume_proxy) NULL else validated_geo_rds(),
           max_cells = 1000000L,
-          use_direct_geo_path = !resume_proxy && isTRUE(geo_source_is_local()),
+          use_direct_geo_path = FALSE,
           use_direct_raster_path = !resume_proxy,
-          use_direct_paths = !resume_proxy &&
-            isTRUE(geo_source_is_local()),
+          use_direct_paths = FALSE,
           resume_proxy = resume_proxy
         )
 
@@ -1480,7 +1413,15 @@ analysis_server <- function(id) {
         progress_file <- file.path(session_dir, "progress.json")
         result_file <- file.path(session_dir, "result.rds")
         safe_unlink(c(progress_file, result_file))
-        write_progress(progress_file, 0, "Iniciando", "Preparando processo de análise", "starting")
+        write_progress(
+          progress_file,
+          0,
+          "Iniciando",
+          "Preparando processo de análise",
+          "starting",
+          eta_status = "evaluating",
+          eta_seconds = NA_real_
+        )
 
         process <- callr::r_bg(
           func = function(params, progress_file, result_file, app_directory) {
@@ -1553,6 +1494,16 @@ analysis_server <- function(id) {
       state <- progress_state()
       if (identical(state$status, "idle")) return(NULL)
       color <- if (identical(state$status, "error")) "danger" else if (identical(state$status, "complete")) "success" else "primary"
+      eta_text <- NULL
+      if (isTRUE(running())) {
+        eta_status <- as.character(state$eta_status %||% "evaluating")
+        eta_value <- format_processing_time(state$eta_seconds %||% NA_real_)
+        eta_text <- if (identical(eta_status, "estimated") && !is.null(eta_value)) {
+          paste0("Tempo restante estimado: ", eta_value)
+        } else {
+          "Avaliando o tempo de processamento..."
+        }
+      }
       shiny::tagList(
         shiny::div(
           class = "progress-status",
@@ -1560,7 +1511,8 @@ analysis_server <- function(id) {
             if (running()) shiny::icon("gear", class = "fa-spin"),
             paste0(" ", round(state$percent), "% — ", state$stage)
           ),
-          shiny::span(state$detail, class = "text-muted small")
+          shiny::span(state$detail, class = "text-muted small"),
+          if (!is.null(eta_text)) shiny::span(eta_text, class = "processing-eta")
         ),
         shiny::div(
           class = "progress",

@@ -104,6 +104,7 @@ visuals_ui <- function(id) {
 visuals_server <- function(id, automatic_result) {
   shiny::moduleServer(id, function(input, output, session) {
     manual_path <- shiny::reactiveVal(NULL)
+    manual_files <- shiny::reactiveVal(character())
     manual_layers <- shiny::reactiveVal(NULL)
     manual_error <- shiny::reactiveVal(NULL)
     manual_source <- shiny::reactiveVal(NULL)
@@ -185,6 +186,7 @@ visuals_server <- function(id, automatic_result) {
         extensions <- tolower(tools::file_ext(upload$name))
         selected_path <- NULL
         extension <- NULL
+        source_files <- character()
 
         if (length(upload$name) == 1L && extensions[[1]] == "zip") {
           path <- copy_upload_to_named_file(upload, upload_dir)
@@ -193,6 +195,7 @@ visuals_server <- function(id, automatic_result) {
           selected <- select_preferred_result_file(extracted)
           selected_path <- selected$path
           extension <- tolower(tools::file_ext(selected_path))
+          source_files <- extracted
           source <- list(
             uploaded = basename(path),
             selected = basename(selected_path),
@@ -203,6 +206,7 @@ visuals_server <- function(id, automatic_result) {
           vector_dir <- file.path(upload_dir, paste0("vector_", as.integer(Sys.time())))
           selected_path <- stage_uploaded_vector(upload, vector_dir)
           extension <- tolower(tools::file_ext(selected_path))
+          source_files <- selected_path
           source <- list(
             uploaded = paste(upload$name, collapse = ", "),
             selected = basename(selected_path),
@@ -213,6 +217,7 @@ visuals_server <- function(id, automatic_result) {
           path <- copy_upload_to_named_file(upload, upload_dir)
           selected_path <- path
           extension <- tolower(tools::file_ext(path))
+          source_files <- path
         }
 
         if (extension == "gpkg") {
@@ -257,14 +262,57 @@ visuals_server <- function(id, automatic_result) {
         }
 
         manual_path(selected_path)
+        manual_files(source_files)
         manual_source(source)
       }, error = function(e) {
         manual_error(conditionMessage(e))
         manual_path(NULL)
+        manual_files(character())
         manual_source(NULL)
         manual_kind(NULL)
       })
     })
+
+    manual_level_catalog <- shiny::reactive({
+      result_level_catalog(manual_files())
+    })
+
+    available_chart_levels <- shiny::reactive({
+      if (!is.null(manual_path())) {
+        return(manual_level_catalog()$level)
+      }
+      result <- automatic_result()
+      if (is.null(result)) return(character())
+      analysis_result_levels(result)
+    })
+
+    chart_known_group_columns <- function() {
+      if (!is.null(manual_path())) return(character())
+      result <- automatic_result()
+      if (is.null(result)) return(character())
+      normalize_group_columns(
+        result$group_columns %||% result$group_column %||% character(),
+        max_columns = 2L
+      )
+    }
+
+    load_chart_result_level <- function(level) {
+      level <- canonical_result_level(level)[[1]]
+      if (is.na(level)) stop("Nível de resultado inválido para o gráfico.", call. = FALSE)
+
+      if (!is.null(manual_path())) {
+        catalog <- manual_level_catalog()
+        entry <- catalog[catalog$level == level, , drop = FALSE]
+        if (!nrow(entry)) {
+          stop("O nível selecionado não existe no arquivo carregado.", call. = FALSE)
+        }
+        return(read_result_dataset(entry$path[[1]], layer = entry$source[[1]]))
+      }
+
+      result <- automatic_result()
+      shiny::req(result)
+      load_analysis_result_level(result, level)
+    }
 
     current_data <- shiny::reactive({
       if (!is.null(manual_path())) {
@@ -363,12 +411,10 @@ visuals_server <- function(id, automatic_result) {
 
       years <- if ("Year" %in% names(data)) sort(unique(as.integer(as.character(data$Year)))) else integer()
 
-      non_numeric <- names(data)[
-        !vapply(data, is.numeric, logical(1))
-      ]
-      non_numeric <- setdiff(non_numeric, c("AnalysisLevel"))
+      group_columns <- result_group_columns(data)
+      levels <- available_chart_levels()
       current_chart_group <- input$chart_group %||% "__none__"
-      chart_group_choices <- c("Sem agrupamento" = "__none__", stats::setNames(non_numeric, non_numeric))
+      chart_group_choices <- chart_grouping_choices(levels, group_columns)
       shiny::updateSelectInput(
         session,
         "chart_group",
@@ -380,7 +426,7 @@ visuals_server <- function(id, automatic_result) {
       if (inherits(spatial_data, "sf")) {
         shiny::updateSelectInput(session, "map_class", choices = numeric_columns, selected = default_primary)
         shiny::updateSelectizeInput(session, "map_years", choices = years, selected = years, server = TRUE)
-        shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = "", stats::setNames(non_numeric, non_numeric)))
+        shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = "", stats::setNames(group_columns, group_columns)))
       } else {
         shiny::updateSelectInput(session, "map_class", choices = character(), selected = character())
         shiny::updateSelectizeInput(session, "map_years", choices = character(), selected = character(), server = TRUE)
@@ -401,9 +447,27 @@ visuals_server <- function(id, automatic_result) {
     })
 
     chart_object <- shiny::reactive({
+      selection <- input$chart_group %||% "__none__"
       data <- current_table()
-      chart_group <- input$chart_group %||% "__none__"
-      if (identical(chart_group, "__none__")) chart_group <- NULL
+      chart_group <- NULL
+
+      if (startsWith(selection, "__level__:")) {
+        level <- sub("^__level__:", "", selection)
+        level_data <- load_chart_result_level(level)
+        prepared <- prepare_chart_level_data(
+          level_data,
+          level = level,
+          known_group_columns = chart_known_group_columns()
+        )
+        data <- prepared$data
+        chart_group <- prepared$group
+      } else if (startsWith(selection, "__column__:")) {
+        chart_group <- sub("^__column__:", "", selection)
+        if (!chart_group %in% names(data)) {
+          stop("A coluna de agrupamento selecionada não existe neste resultado.", call. = FALSE)
+        }
+      }
+
       build_timeseries_plot(
         data,
         comparison.columns = input$comparison_columns,
