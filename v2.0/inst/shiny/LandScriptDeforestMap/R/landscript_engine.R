@@ -100,7 +100,65 @@ add_variations <- function(data, id_columns, value_columns, year_column = "Year"
   data
 }
 
-extract_zonal_counts <- function(raster_path, mesh, year) {
+new_zonal_cache <- function() {
+  cache <- new.env(parent = emptyenv())
+  cache$zones <- list()
+  cache$mesh_entries <- list()
+  cache$zone_cache_hits <- 0L
+  cache$rasterizations <- 0L
+  cache$source_cells <- 0
+  cache$processed_cells <- 0
+  cache
+}
+
+cached_mesh_vector <- function(mesh, raster, cache = NULL) {
+  raster_crs <- terra::crs(raster)
+  if (!is.null(cache)) {
+    entries <- cache$mesh_entries
+    if (length(entries)) {
+      matches <- vapply(entries, function(entry) identical(entry$crs, raster_crs), logical(1))
+      if (any(matches)) return(entries[[which(matches)[[1]]]]$mesh)
+    }
+  }
+
+  transformed <- terra::vect(sf::st_transform(mesh, raster_crs))
+  if (!is.null(cache)) {
+    cache$mesh_entries <- c(
+      cache$mesh_entries,
+      list(list(crs = raster_crs, mesh = transformed))
+    )
+  }
+  transformed
+}
+
+crop_raster_to_mesh <- function(raster, mesh_vector, raster_path = NULL) {
+  cropped <- tryCatch(
+    terra::crop(raster, terra::ext(mesh_vector), snap = "out"),
+    error = function(e) {
+      stop(
+        "O raster ", basename(raster_path %||% "selecionado"),
+        " não intersecta a área de estudo: ", conditionMessage(e),
+        call. = FALSE
+      )
+    }
+  )
+  if (!terra::ncell(cropped) || terra::nrow(cropped) < 1L || terra::ncol(cropped) < 1L) {
+    stop(
+      "O raster ", basename(raster_path %||% "selecionado"),
+      " não possui células na extensão da área de estudo.",
+      call. = FALSE
+    )
+  }
+  cropped
+}
+
+extract_zonal_counts <- function(
+  raster_path,
+  mesh,
+  year,
+  zone_cache = NULL,
+  cache_key = NULL
+) {
   raster <- terra::rast(raster_path)
   if (terra::nlyr(raster) != 1L) {
     stop("O raster deve possuir uma única camada: ", basename(raster_path), call. = FALSE)
@@ -109,16 +167,44 @@ extract_zonal_counts <- function(raster_path, mesh, year) {
     stop("Raster sem CRS: ", basename(raster_path), call. = FALSE)
   }
 
-  mesh_raster_crs <- sf::st_transform(mesh, terra::crs(raster))
-  zones <- terra::rasterize(
-    terra::vect(mesh_raster_crs),
-    raster,
-    field = "ID_mesh",
-    background = NA
-  )
+  mesh_vector <- cached_mesh_vector(mesh, raster, zone_cache)
+  raster_aoi <- crop_raster_to_mesh(raster, mesh_vector, raster_path)
+
+  zones <- NULL
+  if (!is.null(zone_cache) && !is.null(cache_key) && nzchar(cache_key)) {
+    cached <- zone_cache$zones[[cache_key]]
+    geometry_matches <- !is.null(cached) && isTRUE(tryCatch(
+      terra::compareGeom(cached, raster_aoi, stopOnError = FALSE),
+      error = function(e) FALSE
+    ))
+    if (geometry_matches) {
+      zones <- cached
+      zone_cache$zone_cache_hits <- zone_cache$zone_cache_hits + 1L
+    }
+  }
+
+  if (is.null(zones)) {
+    zones <- terra::rasterize(
+      mesh_vector,
+      raster_aoi,
+      field = "ID_mesh",
+      background = NA
+    )
+    if (!is.null(zone_cache)) {
+      zone_cache$rasterizations <- zone_cache$rasterizations + 1L
+      if (!is.null(cache_key) && nzchar(cache_key)) {
+        zone_cache$zones[[cache_key]] <- zones
+      }
+    }
+  }
   names(zones) <- "ID_mesh"
 
-  cross <- terra::crosstab(c(zones, raster), long = TRUE, useNA = FALSE)
+  if (!is.null(zone_cache)) {
+    zone_cache$source_cells <- zone_cache$source_cells + terra::ncell(raster)
+    zone_cache$processed_cells <- zone_cache$processed_cells + terra::ncell(raster_aoi)
+  }
+
+  cross <- terra::crosstab(c(zones, raster_aoi), long = TRUE, useNA = FALSE)
   base <- data.frame(ID_mesh = mesh$ID_mesh, stringsAsFactors = FALSE)
 
   if (is.null(cross) || !nrow(cross)) {
@@ -273,21 +359,23 @@ write_result_geopackages <- function(
   layers,
   threshold_bytes = 2 * 1024^3
 ) {
+  # Most analyses fit in one GeoPackage. Write that common case once and only
+  # split it if the actual file exceeds the configured threshold. The previous
+  # flow wrote every split file first and then wrote all layers a second time.
+  combined_path <- file.path(output_folder, paste0(output_name, ".gpkg"))
+  write_result_layers(combined_path, layers)
+  combined_size <- file.info(combined_path)$size
+  if (is.finite(combined_size) && combined_size <= threshold_bytes) {
+    return(setNames(normalizePath(combined_path, mustWork = TRUE), "complete_gpkg"))
+  }
+
+  safe_unlink(combined_path)
   split_layers <- split_result_layers(layers)
   split_layers <- split_layers[lengths(split_layers) > 0L]
-
   split_paths <- vapply(names(split_layers), function(layer_group) {
     path <- file.path(output_folder, paste0(output_name, "_", layer_group, ".gpkg"))
     write_result_layers(path, split_layers[[layer_group]])
   }, character(1))
-
-  total_size <- sum(file.info(split_paths)$size, na.rm = TRUE)
-  if (is.finite(total_size) && total_size <= threshold_bytes) {
-    combined_path <- file.path(output_folder, paste0(output_name, ".gpkg"))
-    write_result_layers(combined_path, layers)
-    safe_unlink(split_paths)
-    return(setNames(normalizePath(combined_path, mustWork = TRUE), "complete_gpkg"))
-  }
 
   stats::setNames(
     normalizePath(split_paths, mustWork = TRUE),
@@ -375,10 +463,34 @@ geo_bundle_files <- function(path) {
   ]
 }
 
+raster_index_for_params <- function(params) {
+  index <- params$raster_index
+  required <- c("path", "file", "year")
+  valid_cached_index <- is.data.frame(index) &&
+    nrow(index) > 0L &&
+    all(required %in% names(index)) &&
+    all(file.exists(index$path))
+
+  if (!isTRUE(valid_cached_index)) {
+    return(ensure_raster_grid_signatures(list_raster_files(params$raster_folder)))
+  }
+
+  optional <- intersect(c("pixel_area_km2", "grid_signature", "grid_group"), names(index))
+  index <- index[, c(required, optional), drop = FALSE]
+  index$path <- normalizePath(index$path, mustWork = TRUE)
+  index$file <- basename(index$path)
+  index$year <- as.integer(index$year)
+  if (anyNA(index$year) || anyDuplicated(index$year)) {
+    return(ensure_raster_grid_signatures(list_raster_files(params$raster_folder)))
+  }
+  index <- index[order(index$year), , drop = FALSE]
+  ensure_raster_grid_signatures(index)
+}
+
 analysis_fingerprint <- function(params) {
   geo_files <- geo_bundle_files(params$geo_path)
   geo_info <- file.info(geo_files)
-  raster_index <- list_raster_files(params$raster_folder)
+  raster_index <- ensure_raster_grid_signatures(raster_index_for_params(params))
   raster_info <- file.info(raster_index$path)
   list(
     geo = data.frame(
@@ -399,7 +511,8 @@ analysis_fingerprint <- function(params) {
     mapbiomas = params$mapbiomas %||% "",
     custom_classes = params$custom_classes,
     pixel_km2_ratio = params$pixel_km2_ratio,
-    max_cells = params$max_cells %||% NA_integer_
+    max_cells = params$max_cells %||% NA_integer_,
+    use_direct_paths = isTRUE(params$use_direct_paths)
   )
 }
 
@@ -428,12 +541,31 @@ prepare_proxy_inputs <- function(params, proxy_dir) {
       basename(geo_files) == basename(params$geo_path)
   ][1] %||% geo_files[[1]]
 
-  raster_index <- list_raster_files(params$raster_folder)
-  copy_files_to_proxy(raster_index$path, raster_dir)
+  raster_index <- raster_index_for_params(params)
+  raster_index$path <- copy_files_to_proxy(raster_index$path, raster_dir)
+  raster_index$file <- basename(raster_index$path)
 
   params$geo_path <- normalizePath(geo_primary, mustWork = TRUE)
   params$raster_folder <- normalizePath(raster_dir, mustWork = TRUE)
+  params$raster_index <- raster_index
   params
+}
+
+prepare_direct_inputs <- function(params) {
+  params$geo_path <- normalizePath(params$geo_path, mustWork = TRUE)
+  params$raster_folder <- normalizePath(params$raster_folder, mustWork = TRUE)
+  params$raster_index <- raster_index_for_params(params)
+  params
+}
+
+read_validated_geo_checkpoint <- function(path) {
+  if (is.null(path) || !length(path) || !file.exists(path[[1]])) return(NULL)
+  saved <- tryCatch(readRDS(path[[1]]), error = function(e) NULL)
+  geo <- if (is.list(saved) && inherits(saved$geo, "sf")) saved$geo else saved
+  if (!inherits(geo, "sf") || !nrow(geo) || !isTRUE(attr(geo, "landscript_validated"))) {
+    return(NULL)
+  }
+  read_geo(geo)
 }
 
 analysis_result_files_ready <- function(result) {
@@ -443,6 +575,169 @@ analysis_result_files_ready <- function(result) {
   all(!is.na(xlsx_files) & file.exists(xlsx_files)) &&
     length(gpkg_files) > 0L &&
     all(!is.na(gpkg_files) & file.exists(gpkg_files))
+}
+
+resolve_result_checkpoint <- function(checkpoint) {
+  result_path <- checkpoint$result_rds %||% NULL
+  if (!is.null(result_path) && length(result_path) && file.exists(result_path[[1]])) {
+    restored <- tryCatch(readRDS(result_path[[1]]), error = function(e) NULL)
+    if (!is.null(restored)) return(restored)
+  }
+  checkpoint
+}
+
+analysis_level_labels <- function() {
+  c(
+    grid = "Grid_ID",
+    mesh = "Malha",
+    groups = "Grupos",
+    groups_1 = "Grupos 1",
+    groups_2 = "Grupos 2",
+    total = "Total"
+  )
+}
+
+is_lazy_analysis_result <- function(result) {
+  inherits(result, "landscript_lazy_result") || isTRUE(result$landscript_lazy)
+}
+
+analysis_result_levels <- function(result) {
+  known <- names(analysis_level_labels())
+  if (is_lazy_analysis_result(result)) {
+    levels <- as.character(result$available_levels %||% character())
+    return(known[known %in% levels])
+  }
+  known[vapply(known, function(level) !is.null(result[[level]]), logical(1))]
+}
+
+analysis_result_pointer <- function(result, result_path = NULL) {
+  levels <- analysis_result_levels(result)
+  row_counts <- vapply(levels, function(level) nrow(result[[level]]), numeric(1))
+  group_columns <- normalize_group_columns(
+    result$group_columns %||% result$group_column %||% character(),
+    max_columns = 2L
+  )
+  group_count <- 1L
+  if (length(group_columns) && !is.null(result$groups) &&
+      all(group_columns %in% names(result$groups))) {
+    group_count <- nrow(unique(sf::st_drop_geometry(result$groups)[group_columns]))
+  }
+  years <- suppressWarnings(as.integer(result$raster_index$year %||% integer()))
+  years <- years[is.finite(years)]
+
+  pointer <- list(
+    landscript_lazy = TRUE,
+    job_result_rds = if (!is.null(result_path) && length(result_path)) {
+      normalizePath(result_path[[1]], mustWork = FALSE)
+    } else {
+      NULL
+    },
+    available_levels = levels,
+    row_counts = row_counts,
+    mesh_count = unname(row_counts[["mesh"]] %||% 0),
+    group_count = as.integer(group_count),
+    year_min = if (length(years)) min(years) else NA_integer_,
+    year_max = if (length(years)) max(years) else NA_integer_,
+    raster_count = if (is.null(result$raster_index)) 0L else nrow(result$raster_index),
+    group_column = group_columns,
+    group_columns = group_columns,
+    summary_class_columns = result$summary_class_columns %||% character(),
+    output_name = result$output_name,
+    output_folder = result$output_folder,
+    overlap_removed = isTRUE(result$overlap_removed),
+    files = result$files
+  )
+  class(pointer) <- c("landscript_lazy_result", "list")
+  pointer
+}
+
+analysis_result_layer_file <- function(result, level) {
+  files <- result$files %||% character()
+  if (!length(files)) return(NULL)
+
+  preferred_key <- switch(
+    level,
+    mesh = "complete_gpkg_id_mesh",
+    grid = "complete_gpkg_grid_id",
+    groups = "complete_gpkg_grupos",
+    groups_1 = "complete_gpkg_grupos",
+    groups_2 = "complete_gpkg_grupos",
+    total = "complete_gpkg_total",
+    NULL
+  )
+  candidate_keys <- unique(c("complete_gpkg", preferred_key, names(files)[grepl("gpkg", names(files))]))
+  candidates <- unname(files[candidate_keys[candidate_keys %in% names(files)]])
+  candidates <- unique(candidates[!is.na(candidates) & nzchar(candidates) & file.exists(candidates)])
+
+  for (path in candidates) {
+    layers <- tryCatch(sf::st_layers(path)$name, error = function(e) character())
+    if (level %in% layers) return(path)
+  }
+  NULL
+}
+
+load_analysis_result_level <- function(result, level) {
+  levels <- analysis_result_levels(result)
+  if (!length(levels)) stop("O resultado não possui camadas disponíveis.", call. = FALSE)
+  if (!level %in% levels) {
+    stop("A camada de resultado '", level, "' não está disponível.", call. = FALSE)
+  }
+  if (!is_lazy_analysis_result(result)) return(result[[level]])
+
+  cache <- result$cache
+  if (!is.environment(cache)) {
+    cache <- new.env(parent = emptyenv())
+  }
+  if (exists(level, envir = cache, inherits = FALSE)) {
+    return(get(level, envir = cache, inherits = FALSE))
+  }
+
+  gpkg <- analysis_result_layer_file(result, level)
+  data <- if (!is.null(gpkg)) {
+    read_result_dataset(gpkg, layer = level)
+  } else {
+    result_path <- result$job_result_rds %||% NULL
+    if (is.null(result_path) || !length(result_path) || !file.exists(result_path[[1]])) {
+      stop("Não foi possível localizar a camada '", level, "' nos arquivos finais.", call. = FALSE)
+    }
+    complete <- readRDS(result_path[[1]])
+    complete[[level]]
+  }
+  if (is.null(data)) {
+    stop("A camada de resultado '", level, "' está vazia.", call. = FALSE)
+  }
+  group_columns <- normalize_group_columns(
+    result$group_columns %||% result$group_column %||% character(),
+    max_columns = 2L
+  )
+  for (column in intersect(group_columns, names(data))) {
+    data[[column]] <- factor(data[[column]])
+  }
+  assign(level, data, envir = cache)
+  data
+}
+
+read_analysis_job_result <- function(path, lazy = FALSE) {
+  payload <- readRDS(path)
+  if (isTRUE(lazy)) {
+    if (!is_lazy_analysis_result(payload)) {
+      result_path <- payload$job_result_rds %||% NULL
+      complete <- if (!is.null(result_path) && length(result_path) && file.exists(result_path[[1]])) {
+        readRDS(result_path[[1]])
+      } else {
+        payload
+      }
+      payload <- analysis_result_pointer(complete, result_path)
+    }
+    payload$cache <- new.env(parent = emptyenv())
+    return(payload)
+  }
+
+  result_path <- payload$job_result_rds %||% NULL
+  if (!is.null(result_path) && length(result_path) && file.exists(result_path[[1]])) {
+    return(readRDS(result_path[[1]]))
+  }
+  payload
 }
 
 run_land_analysis <- function(params, progress_file = NULL) {
@@ -483,8 +778,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
     if (is.null(prepared_params)) {
       if (!is.null(metadata)) clear_proxy_contents(proxy_dir)
       dir.create(proxy_dir, recursive = TRUE, showWarnings = FALSE)
-      progress(3, "Proxy", paste0("Copiando entradas para ", proxy_dir))
-      params <- prepare_proxy_inputs(params, proxy_dir)
+      if (isTRUE(params$use_direct_paths)) {
+        progress(3, "Proxy", "Usando caminhos locais diretamente; sem copiar entradas para o proxy.")
+        params <- prepare_direct_inputs(params)
+      } else {
+        progress(3, "Proxy", paste0("Copiando entradas para ", proxy_dir))
+        params <- prepare_proxy_inputs(params, proxy_dir)
+      }
       write_checkpoint(params, proxy_dir, "params")
       write_checkpoint(
         list(
@@ -498,17 +798,24 @@ run_land_analysis <- function(params, progress_file = NULL) {
     }
   }
 
+  # Keep terra's potentially large temporary files beside the selected output
+  # and proxy folders. This avoids silently filling the system temporary disk
+  # when the user deliberately selected a larger external drive.
+  terra_tmp <- file.path(proxy_dir, "terra_tmp")
+  dir.create(terra_tmp, recursive = TRUE, showWarnings = FALSE)
+  terra::terraOptions(tempdir = terra_tmp, progress = 0)
+
   final_checkpoint <- read_checkpoint(proxy_dir, "result")
   if (analysis_result_files_ready(final_checkpoint)) {
     progress(98, "Retomada", "Resultado final encontrado; conferindo arquivos.")
-    write_checkpoint(final_checkpoint, proxy_dir, "result")
+    final_result <- resolve_result_checkpoint(final_checkpoint)
     progress(99, "Limpeza", "Removendo pasta proxy temporária.")
     safe_unlink(proxy_dir)
     progress(100, "Concluído", "Resultado retomado e pasta proxy removida.", "complete")
-    return(final_checkpoint)
+    return(final_result)
   }
 
-  raster_index <- list_raster_files(params$raster_folder)
+  raster_index <- raster_index_for_params(params)
 
   progress(6, "Leitura", "Abrindo e validando o arquivo geoespacial")
   mesh_checkpoint <- read_checkpoint(proxy_dir, "mesh")
@@ -519,8 +826,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
     overlap_removed <- mesh_checkpoint$overlap_removed
     mesh <- mesh_checkpoint$mesh
   } else {
-    validate_shapefile_geometry(params$geo_path)
-    geo <- read_geo(params$geo_path)
+    geo <- read_validated_geo_checkpoint(params$validated_geo_rds)
+    if (is.null(geo)) {
+      validate_shapefile_geometry(params$geo_path)
+      geo <- read_geo(params$geo_path)
+    } else {
+      progress(8, "Leitura", "Reutilizando a geometria já validada pelo dashboard")
+    }
     group_columns <- normalize_group_columns(params$group_column %||% character(), max_columns = 2L)
 
     progress(10, "Limites", "Dissolvendo classes e removendo sobreposições")
@@ -553,6 +865,26 @@ run_land_analysis <- function(params, progress_file = NULL) {
     )
   }
 
+  grid_sizes <- tabulate(raster_index$grid_group)
+  aligned_grid_count <- length(grid_sizes)
+  if (nrow(raster_index) > 1L && aligned_grid_count == 1L) {
+    progress(
+      14.5,
+      "Alinhamento dos rasters",
+      "Grades idênticas confirmadas; a rasterização da malha será reutilizada entre os anos."
+    )
+  } else if (nrow(raster_index) > 1L) {
+    progress(
+      14.5,
+      "Alinhamento dos rasters",
+      paste0(
+        "Foram identificadas ", aligned_grid_count,
+        " grades distintas; cada grade será processada de forma independente."
+      )
+    )
+  }
+
+  zone_cache <- new_zonal_cache()
   all_counts <- vector("list", nrow(raster_index))
   counts_dir <- file.path(proxy_dir, "raster_counts")
   dir.create(counts_dir, recursive = TRUE, showWarnings = FALSE)
@@ -574,17 +906,48 @@ run_land_analysis <- function(params, progress_file = NULL) {
         next
       }
     }
+    grid_group <- raster_index$grid_group[[i]]
+    cache_key <- if (aligned_grid_count == 1L && nrow(raster_index) > 1L) {
+      paste0("grid_", grid_group)
+    } else {
+      NULL
+    }
+    cache_available <- !is.null(cache_key) && !is.null(zone_cache$zones[[cache_key]])
     progress(
       pct,
       paste0("Raster ", i, " de ", nrow(raster_index)),
-      paste0(raster_index$year[[i]], " — ", raster_index$file[[i]])
+      paste0(
+        raster_index$year[[i]], " — ", raster_index$file[[i]], ". ",
+        if (cache_available) {
+          "Reutilizando a malha rasterizada da grade alinhada."
+        } else {
+          "Limitando o processamento à extensão da área de estudo."
+        }
+      )
     )
     all_counts[[i]] <- extract_zonal_counts(
       raster_index$path[[i]],
       mesh,
-      raster_index$year[[i]]
+      raster_index$year[[i]],
+      zone_cache = zone_cache,
+      cache_key = cache_key
     )
     saveRDS(all_counts[[i]], count_checkpoint)
+  }
+
+  if (zone_cache$source_cells > 0) {
+    reduction <- 100 * (1 - zone_cache$processed_cells / zone_cache$source_cells)
+    progress(
+      70,
+      "Rasters processados",
+      paste0(
+        "Recorte pela área de estudo reduziu em ",
+        format(round(max(0, reduction), 1), decimal.mark = ",", trim = TRUE),
+        "% as células avaliadas; ", zone_cache$rasterizations,
+        " rasterização(ões) da malha e ", zone_cache$zone_cache_hits,
+        " reutilização(ões)."
+      )
+    )
   }
 
   progress(71, "Conversão", "Combinando anos e convertendo pixels para km²")
@@ -714,8 +1077,15 @@ run_land_analysis <- function(params, progress_file = NULL) {
       result_rds = normalizePath(result_rds, mustWork = FALSE)
     )
   )
-  saveRDS(result, result_rds)
-  write_checkpoint(result, proxy_dir, "result")
+  save_rds_atomic(result, result_rds)
+  write_checkpoint(
+    list(
+      files = result$files,
+      result_rds = normalizePath(result_rds, mustWork = TRUE)
+    ),
+    proxy_dir,
+    "result"
+  )
 
   progress(99, "Limpeza", "Removendo pasta proxy temporária.")
   safe_unlink(proxy_dir)
@@ -725,13 +1095,12 @@ run_land_analysis <- function(params, progress_file = NULL) {
 
 run_analysis_job <- function(params, progress_file, result_file, app_directory) {
   options(landscript.app_dir = app_directory)
-  source(file.path(app_directory, "R", "utils.R"), local = globalenv())
-  source(file.path(app_directory, "R", "spatial_io.R"), local = globalenv())
-  source(file.path(app_directory, "R", "landscript_engine.R"), local = globalenv())
 
   tryCatch({
     result <- run_land_analysis(params, progress_file)
-    saveRDS(result, result_file)
+    result_path <- result$files[["result_rds"]] %||% NULL
+    pointer <- analysis_result_pointer(result, result_path)
+    save_rds_atomic(pointer, result_file)
     invisible(result_file)
   }, error = function(e) {
     write_progress(progress_file, 100, "Erro", conditionMessage(e), "error")

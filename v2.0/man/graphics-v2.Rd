@@ -26,7 +26,7 @@ mesh.map(
   map.height = 3000,
   map.width = 2000,
   map.units = "px",
-  grid.color = "transparent",
+  grid.color = "#17212B66",
   classes.column = NULL,
   classes.col = c("pink", "purple", "#E1AD01", "darkgreen", "lightgreen"),
   highlight = NULL

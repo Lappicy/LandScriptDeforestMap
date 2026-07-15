@@ -1,5 +1,9 @@
 `%||%` <- function(x, y) {
-  if (is.null(x) || length(x) == 0L || all(is.na(x))) y else x
+  if (is.null(x) || length(x) == 0L) return(y)
+  # Only inspect missingness for atomic vectors. Calling is.na()/all() on sf,
+  # terra or other large structured objects can scan the whole object and may
+  # even dispatch to an incompatible method merely to decide a fallback.
+  if (is.atomic(x) && all(is.na(x))) y else x
 }
 
 app_root <- function() {
@@ -184,6 +188,10 @@ list_raster_files <- function(folder) {
     ignore.case = TRUE
   )
   files <- files[file.info(files)$isdir %in% FALSE]
+  # macOS may create AppleDouble sidecar files (._name.tif) on external
+  # volumes. They are metadata, not rasters, and opening them wastes time or
+  # produces duplicate-year/invalid-raster errors.
+  files <- files[!startsWith(basename(files), "._")]
   if (!length(files)) {
     stop("Nenhum raster suportado foi encontrado na pasta.", call. = FALSE)
   }
@@ -232,12 +240,31 @@ raster_pixel_area_km2 <- function(path) {
 }
 
 raster_pixel_area_from_raster <- function(raster, label = "raster") {
-  area_raster <- terra::cellSize(raster, unit = "km")
-  center <- data.frame(
-    x = mean(c(terra::xmin(raster), terra::xmax(raster))),
-    y = mean(c(terra::ymin(raster), terra::ymax(raster)))
+  # cellSize(raster) materializes an area raster with the same number of cells
+  # as the source. For continental rasters this can require tens of gigabytes,
+  # even though the dashboard only needs the area of the central pixel. Build
+  # an equivalent one-cell raster instead; terra then performs the same
+  # geodesic calculation at constant cost.
+  center <- cbind(
+    mean(c(terra::xmin(raster), terra::xmax(raster))),
+    mean(c(terra::ymin(raster), terra::ymax(raster)))
   )
-  area <- terra::extract(area_raster, center)[[2]]
+  center_cell <- terra::cellFromXY(raster, center)[[1]]
+  if (!is.finite(center_cell)) {
+    stop("Não foi possível localizar o pixel central de ", label, ".", call. = FALSE)
+  }
+  center_xy <- terra::xyFromCell(raster, center_cell)
+  resolution <- abs(terra::res(raster))
+  one_cell <- terra::rast(
+    nrows = 1,
+    ncols = 1,
+    xmin = center_xy[[1]] - resolution[[1]] / 2,
+    xmax = center_xy[[1]] + resolution[[1]] / 2,
+    ymin = center_xy[[2]] - resolution[[2]] / 2,
+    ymax = center_xy[[2]] + resolution[[2]] / 2,
+    crs = terra::crs(raster)
+  )
+  area <- terra::values(terra::cellSize(one_cell, unit = "km"))[[1]]
   if (!length(area) || !is.finite(area) || area <= 0) {
     stop("Não foi possível calcular a área do pixel de ", label, ".", call. = FALSE)
   }
@@ -286,6 +313,63 @@ report_progress <- function(progress, percent, stage, detail = NULL, status = "r
   }
 }
 
+normalize_raster_crs_signature <- function(crs) {
+  gsub("[[:space:]]+", "", as.character(crs %||% ""))
+}
+
+raster_grid_definition <- function(raster) {
+  if (!inherits(raster, "SpatRaster")) {
+    raster <- terra::rast(raster)
+  }
+  list(
+    crs = normalize_raster_crs_signature(terra::crs(raster)),
+    resolution = as.numeric(terra::res(raster)),
+    extent = as.numeric(as.vector(terra::ext(raster))),
+    origin = as.numeric(terra::origin(raster)),
+    dimensions = c(terra::ncol(raster), terra::nrow(raster)),
+    rotated = isTRUE(terra::is.rotated(raster))
+  )
+}
+
+raster_grid_signature <- function(raster) {
+  definition <- raster_grid_definition(raster)
+  number_signature <- function(x) {
+    paste(sprintf("%.17g", as.numeric(x)), collapse = ",")
+  }
+  paste(
+    paste0("crs=", definition$crs),
+    paste0("res=", number_signature(definition$resolution)),
+    paste0("ext=", number_signature(definition$extent)),
+    paste0("origin=", number_signature(definition$origin)),
+    paste0("dim=", number_signature(definition$dimensions)),
+    paste0("rotated=", as.integer(definition$rotated)),
+    sep = "|"
+  )
+}
+
+ensure_raster_grid_signatures <- function(index) {
+  if (!is.data.frame(index) || !nrow(index) || !"path" %in% names(index)) {
+    stop("O índice de rasters não é válido.", call. = FALSE)
+  }
+
+  signatures <- if ("grid_signature" %in% names(index)) {
+    as.character(index$grid_signature)
+  } else {
+    rep(NA_character_, nrow(index))
+  }
+  missing <- is.na(signatures) | !nzchar(signatures)
+  if (any(missing)) {
+    signatures[missing] <- vapply(
+      index$path[missing],
+      function(path) raster_grid_signature(terra::rast(path)),
+      character(1)
+    )
+  }
+  index$grid_signature <- signatures
+  index$grid_group <- match(signatures, unique(signatures))
+  index
+}
+
 inspect_raster_folder <- function(folder, progress = NULL) {
   report_progress(progress, 2, "Carregando arquivos", "Procurando rasters na pasta selecionada.")
   index <- list_raster_files(folder)
@@ -321,14 +405,19 @@ inspect_raster_folder <- function(folder, progress = NULL) {
       progress,
       segment_mid,
       paste0("Validando imagem ", i, " de ", total),
-      paste0(index$year[[i]], " — conferindo CRS, resolução e área do pixel.")
+      paste0(index$year[[i]], " — conferindo CRS, grade e área do pixel.")
     )
 
+    grid_definition <- raster_grid_definition(raster)
     metadata[[i]] <- list(
       crs = crs,
       crs_label = terra::crs(raster, proj = TRUE),
-      resolution = terra::res(raster),
-      dimensions = c(terra::ncol(raster), terra::nrow(raster)),
+      resolution = grid_definition$resolution,
+      extent = grid_definition$extent,
+      origin = grid_definition$origin,
+      dimensions = grid_definition$dimensions,
+      rotated = grid_definition$rotated,
+      grid_signature = raster_grid_signature(raster),
       pixel_area_km2 = raster_pixel_area_from_raster(raster, label)
     )
 
@@ -340,10 +429,16 @@ inspect_raster_folder <- function(folder, progress = NULL) {
     )
   }
 
-  report_progress(progress, 92, "Consolidando validação", "Comparando CRS e resolução entre as imagens.")
+  report_progress(
+    progress,
+    92,
+    "Consolidando validação",
+    "Comparando CRS, resolução, extensão, origem e dimensões entre as imagens."
+  )
 
   crs_values <- vapply(metadata, `[[`, character(1), "crs")
   resolution_values <- do.call(rbind, lapply(metadata, `[[`, "resolution"))
+  dimension_values <- do.call(rbind, lapply(metadata, `[[`, "dimensions"))
   pixel_areas <- vapply(metadata, `[[`, numeric(1), "pixel_area_km2")
   normalized_area <- normalize_pixel_area_km2(stats::median(pixel_areas))
   same_crs <- length(unique(crs_values)) == 1L
@@ -353,7 +448,11 @@ inspect_raster_folder <- function(folder, progress = NULL) {
     function(x) isTRUE(all.equal(x, rep(x[[1]], length(x)), tolerance = 1e-8))
   ))
 
+  grid_signatures <- vapply(metadata, `[[`, character(1), "grid_signature")
+  same_grid <- length(unique(grid_signatures)) == 1L
   index$pixel_area_km2 <- pixel_areas
+  index$grid_signature <- grid_signatures
+  index$grid_group <- match(grid_signatures, unique(grid_signatures))
   list(
     index = index,
     count = nrow(index),
@@ -365,8 +464,84 @@ inspect_raster_folder <- function(folder, progress = NULL) {
     pixel_area_standardized = normalized_area$standardized,
     pixel_area_standard_label = normalized_area$standard_label,
     pixel_area_range = range(pixel_areas),
+    estimated_uncompressed_zone_bytes = max(
+      apply(dimension_values, 1, prod) * 4,
+      na.rm = TRUE
+    ),
     same_crs = same_crs,
-    same_resolution = same_resolution
+    same_resolution = same_resolution,
+    grids_aligned = same_grid,
+    grid_group_count = length(unique(grid_signatures))
+  )
+}
+
+nearest_existing_path <- function(path) {
+  path <- path.expand(as.character(path %||% ""))
+  if (!nzchar(path)) return(NA_character_)
+  if (file.exists(path) && !dir.exists(path)) path <- dirname(path)
+  while (!dir.exists(path)) {
+    parent <- dirname(path)
+    if (identical(parent, path)) return(NA_character_)
+    path <- parent
+  }
+  normalizePath(path, mustWork = TRUE)
+}
+
+disk_available_bytes <- function(path) {
+  path <- nearest_existing_path(path)
+  if (is.na(path) || !nzchar(path)) return(NA_real_)
+
+  if (.Platform$OS.type == "windows") {
+    normalized <- normalizePath(path, winslash = "\\", mustWork = TRUE)
+    drive <- sub("^([A-Za-z]):.*$", "\\1", normalized)
+    if (!grepl("^[A-Za-z]$", drive)) return(NA_real_)
+    command <- paste0("(Get-PSDrive -Name '", drive, "').Free")
+    output <- tryCatch(
+      system2(
+        "powershell",
+        c("-NoProfile", "-Command", shQuote(command)),
+        stdout = TRUE,
+        stderr = FALSE
+      ),
+      error = function(e) character()
+    )
+    first_value <- if (length(output)) output[[1]] else NA_character_
+    value <- suppressWarnings(as.numeric(trimws(first_value)))
+    return(if (is.finite(value)) value else NA_real_)
+  }
+
+  output <- tryCatch(
+    system2("df", c("-Pk", shQuote(path)), stdout = TRUE, stderr = FALSE),
+    error = function(e) character()
+  )
+  if (length(output) < 2L) return(NA_real_)
+  fields <- strsplit(trimws(utils::tail(output, 1L)), "[[:space:]]+")[[1]]
+  if (length(fields) < 4L) return(NA_real_)
+  available_kb <- suppressWarnings(as.numeric(fields[[4]]))
+  if (!is.finite(available_kb)) return(NA_real_)
+  available_kb * 1024
+}
+
+disk_space_advisory <- function(inspection, work_directory) {
+  needed <- suppressWarnings(as.numeric(
+    inspection$estimated_uncompressed_zone_bytes %||% NA_real_
+  ))
+  available <- disk_available_bytes(work_directory)
+  if (!is.finite(needed) || needed <= 0 || !is.finite(available) || available <= 0 || needed <= available) {
+    return(NULL)
+  }
+
+  list(
+    needed_bytes = needed,
+    available_bytes = available,
+    directory = nearest_existing_path(work_directory),
+    text = paste0(
+      "Espaço em disco possivelmente insuficiente: o processamento pode precisar de aproximadamente ",
+      format_bytes(needed),
+      " de espaço temporário sem compressão, mas há ",
+      format_bytes(available),
+      " disponíveis no disco usado pela pasta de saída. A execução continuará, mas pode ficar mais lenta ou apresentar erros."
+    )
   )
 }
 
@@ -404,8 +579,36 @@ write_progress <- function(path, percent, stage, detail = NULL, status = "runnin
   )
   tmp <- paste0(path, ".tmp")
   jsonlite::write_json(payload, tmp, auto_unbox = TRUE, pretty = FALSE)
-  file.rename(tmp, path)
+  moved <- file.rename(tmp, path)
+  if (!isTRUE(moved)) {
+    if (file.exists(path)) unlink(path)
+    moved <- file.rename(tmp, path)
+  }
+  if (!isTRUE(moved)) {
+    copied <- file.copy(tmp, path, overwrite = TRUE)
+    unlink(tmp)
+    if (!isTRUE(copied)) {
+      stop("Não foi possível atualizar o arquivo de progresso.", call. = FALSE)
+    }
+  }
   invisible(payload)
+}
+
+save_rds_atomic <- function(object, path) {
+  directory <- dirname(path)
+  dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+  tmp <- tempfile(paste0(basename(path), "_"), tmpdir = directory, fileext = ".tmp")
+  on.exit(safe_unlink(tmp), add = TRUE)
+  saveRDS(object, tmp)
+  if (file.exists(path)) unlink(path)
+  moved <- file.rename(tmp, path)
+  if (!isTRUE(moved)) {
+    copied <- file.copy(tmp, path, overwrite = TRUE, copy.mode = FALSE)
+    if (!isTRUE(copied)) {
+      stop("Não foi possível salvar o arquivo temporário: ", basename(path), call. = FALSE)
+    }
+  }
+  normalizePath(path, mustWork = TRUE)
 }
 
 read_progress <- function(path) {
@@ -473,7 +676,9 @@ complete_shapefile_bundle <- function(primary, destination, uploaded_files = cha
       zip = "Confira se o ZIP contém todos os componentes do shapefile.",
       upload = paste0(
         "No upload pelo navegador, o Shiny só recebe os arquivos selecionados. ",
-        "Envie um .zip com todos os componentes ou selecione todos eles juntos."
+        "Para buscar os auxiliares automaticamente no mesmo diretório, use o botão ",
+        "'Selecionar arquivo local...'. Alternativamente, envie um .zip com todos ",
+        "os componentes ou selecione todos eles juntos."
       )
     )
     stop(
@@ -788,28 +993,33 @@ prepare_result_download_zip <- function(result, destination) {
     stop("Os arquivos de resultado não foram encontrados para montar o ZIP.", call. = FALSE)
   }
 
-  staging <- tempfile("landscript_results_zip_")
-  dir.create(staging, recursive = TRUE, showWarnings = FALSE)
-  on.exit(unlink(staging, recursive = TRUE, force = TRUE), add = TRUE)
-
   file_names <- basename(files)
   if (anyDuplicated(file_names)) {
     file_names <- make.unique(file_names, sep = "_")
   }
 
-  copied <- file.copy(
-    from = files,
-    to = file.path(staging, file_names),
-    overwrite = TRUE,
-    copy.mode = FALSE
-  )
-  if (!all(copied)) {
-    failed <- basename(files[!copied])
-    stop("Não foi possível copiar para o ZIP: ", paste(failed, collapse = ", "), call. = FALSE)
+  source_directories <- unique(dirname(files))
+  if (length(source_directories) == 1L && !anyDuplicated(basename(files))) {
+    # All final products already live together. Zip them in place instead of
+    # making a second full-size copy, which is especially important when disk
+    # space is tight.
+    zip::zipr(destination, files = basename(files), root = source_directories[[1]])
+  } else {
+    staging <- tempfile("landscript_results_zip_")
+    dir.create(staging, recursive = TRUE, showWarnings = FALSE)
+    on.exit(unlink(staging, recursive = TRUE, force = TRUE), add = TRUE)
+    copied <- file.copy(
+      from = files,
+      to = file.path(staging, file_names),
+      overwrite = TRUE,
+      copy.mode = FALSE
+    )
+    if (!all(copied)) {
+      failed <- basename(files[!copied])
+      stop("Não foi possível copiar para o ZIP: ", paste(failed, collapse = ", "), call. = FALSE)
+    }
+    zip::zipr(destination, files = file_names, root = staging)
   }
-
-  zip_files <- list.files(staging, all.files = FALSE, recursive = FALSE)
-  zip::zipr(destination, files = zip_files, root = staging)
 
   if (!file.exists(destination) || is.na(file.info(destination)$size) || file.info(destination)$size <= 0) {
     stop("O ZIP de resultados foi criado vazio.", call. = FALSE)

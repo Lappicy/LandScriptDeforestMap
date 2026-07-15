@@ -17,7 +17,7 @@ visuals_ui <- function(id) {
           multiple = TRUE,
           accept = c(
             ".zip", ".gpkg", ".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj",
-            ".geojson", ".json", ".kml", ".gml",
+            ".sbn", ".sbx", ".xml", ".geojson", ".json", ".kml", ".gml",
             ".xlsx", ".txt", ".tsv", ".csv", ".rds"
           )
         ),
@@ -272,12 +272,24 @@ visuals_server <- function(id, automatic_result) {
       }
       result <- automatic_result()
       shiny::req(result)
-      level <- input$auto_level %||% if ("grid" %in% names(result)) "grid" else "mesh"
-      if (!level %in% names(result) || is.null(result[[level]])) {
-        level <- if ("grid" %in% names(result)) "grid" else "mesh"
+      levels <- analysis_result_levels(result)
+      shiny::req(length(levels))
+      level <- input$auto_level %||% if ("grid" %in% levels) "grid" else levels[[1]]
+      if (!level %in% levels) {
+        level <- if ("grid" %in% levels) "grid" else levels[[1]]
       }
-      result[[level]]
+      load_analysis_result_level(result, level)
     })
+
+    shiny::observeEvent(automatic_result(), {
+      result <- automatic_result()
+      if (is.null(result)) return()
+      levels <- analysis_result_levels(result)
+      if (!length(levels)) return()
+      labels <- analysis_level_labels()[levels]
+      selected <- if ("grid" %in% levels) "grid" else levels[[1]]
+      shiny::updateSelectInput(session, "auto_level", choices = labels, selected = selected)
+    }, ignoreNULL = TRUE)
 
     current_table <- shiny::reactive({
       result_table_data(current_data())

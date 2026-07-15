@@ -288,7 +288,11 @@ ui <- bslib::page_navbar(
            window.setTimeout(initRasterUploadEnhancements, 250);
            window.setTimeout(initRasterUploadEnhancements, 1000);
            if (window.MutationObserver) {
-             new MutationObserver(initRasterUploadEnhancements).observe(document.body, {
+             var rasterObserverTimer = null;
+             new MutationObserver(function() {
+               window.clearTimeout(rasterObserverTimer);
+               rasterObserverTimer = window.setTimeout(initRasterUploadEnhancements, 80);
+             }).observe(document.body, {
                childList: true,
                subtree: true
              });

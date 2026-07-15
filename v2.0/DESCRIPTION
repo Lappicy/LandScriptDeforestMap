@@ -6,6 +6,8 @@ Authors@R: c(
     person("Thiago", "Lappicy", role = c("aut", "cre"),
            email = "lappicy@gmail.com")
     )
+Author: Thiago Lappicy [aut, cre]
+Maintainer: Thiago Lappicy <lappicy@gmail.com>
 Description: Provides an updated workflow for evaluating deforestation and
     land-cover changes from classified remote sensing images. It creates
     spatial meshes, summarizes raster classes, calculates annual variations,
@@ -46,4 +48,5 @@ Imports:
     zip
 Suggests:
     testthat
+Config/testthat/edition: 3
 RoxygenNote: 7.3.2

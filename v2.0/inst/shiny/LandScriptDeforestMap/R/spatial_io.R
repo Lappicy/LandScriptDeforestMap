@@ -74,7 +74,13 @@ validate_shapefile_geometry <- function(file_name) {
   invisible(TRUE)
 }
 
-read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress = NULL) {
+read_geo <- function(
+  file_name,
+  projection_wanted = 4326,
+  layer = NULL,
+  progress = NULL,
+  reject_invalid = FALSE
+) {
   geo_progress(progress, 5, "Leitura do arquivo", "Abrindo arquivo geoespacial.")
   if (inherits(file_name, "sf")) {
     geo <- file_name
@@ -109,6 +115,9 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress
   geo_progress(progress, 34, "Verificação da geometria", "Checando se as feições são válidas.")
   valid_geometry <- suppressWarnings(sf::st_is_valid(geo))
   if (any(!valid_geometry | is.na(valid_geometry))) {
+    if (isTRUE(reject_invalid)) {
+      stop(invalid_geometry_message(), call. = FALSE)
+    }
     geo_progress(progress, 48, "Correção da geometria", "Corrigindo geometrias inválidas.")
     geo <- suppressWarnings(sf::st_make_valid(geo))
   }
@@ -134,6 +143,36 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress
   attr(geo, "landscript_validated") <- TRUE
   geo_progress(progress, 84, "Arquivo preparado", "Geometria validada.")
   geo
+}
+
+preview_from_loaded_geo <- function(
+  geo,
+  projection_wanted = 4326,
+  simplify_tolerance_m = NULL,
+  tolerance_fraction = 0.001
+) {
+  if (!inherits(geo, "sf") || !nrow(geo)) {
+    stop("O arquivo geoespacial não contém feições.", call. = FALSE)
+  }
+  geo <- drop_zm_geometry(geo)
+  if (is.na(sf::st_crs(geo))) {
+    stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
+  }
+
+  # Simplify in the source CRS before reprojection. For large files this avoids
+  # transforming millions of vertices that will not be sent to Leaflet.
+  preview <- simplify_geo_preview(
+    geo,
+    tolerance_m = simplify_tolerance_m,
+    tolerance_fraction = tolerance_fraction
+  )
+  if (!identical(sf::st_crs(preview), sf::st_crs(projection_wanted))) {
+    preview <- suppressWarnings(sf::st_transform(preview, projection_wanted))
+  }
+  preview <- drop_zm_geometry(preview)
+  sf::st_geometry(preview) <- "geometry"
+  attr(preview, "landscript_preview_type") <- "simplified"
+  preview
 }
 
 preview_simplify_tolerance_degrees <- function(geo, tolerance_m) {
@@ -303,17 +342,9 @@ read_geo_preview <- function(
   if (!inherits(geo, "sf") || !nrow(geo)) {
     stop("O arquivo geoespacial não contém feições.", call. = FALSE)
   }
-  geo <- drop_zm_geometry(geo)
-  if (is.na(sf::st_crs(geo))) {
-    stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
-  }
-  if (!identical(sf::st_crs(geo), sf::st_crs(projection_wanted))) {
-    geo <- suppressWarnings(sf::st_transform(geo, projection_wanted))
-  }
-  geo <- drop_zm_geometry(geo)
-  sf::st_geometry(geo) <- "geometry"
-  simplify_geo_preview(
+  preview_from_loaded_geo(
     geo,
+    projection_wanted = projection_wanted,
     tolerance_m = simplify_tolerance_m,
     tolerance_fraction = tolerance_fraction
   )
