@@ -73,6 +73,7 @@ build_timeseries_plot <- function(
   primary.color = "darkgreen",
   title.name = NULL,
   different.group = NULL,
+  show.correlation = TRUE,
   language = "pt-BR"
 ) {
   language <- normalize_plot_language(language)
@@ -118,27 +119,30 @@ build_timeseries_plot <- function(
       .groups = "drop"
     )
 
-  correlation_data <- summarized |>
-    dplyr::group_by(.data$Year) |>
-    dplyr::summarise(
-      dplyr::across(dplyr::all_of(selected), ~ sum(.x, na.rm = TRUE)),
-      .groups = "drop"
+  subtitle <- NULL
+  if (isTRUE(show.correlation)) {
+    correlation_data <- summarized |>
+      dplyr::group_by(.data$Year) |>
+      dplyr::summarise(
+        dplyr::across(dplyr::all_of(selected), ~ sum(.x, na.rm = TRUE)),
+        .groups = "drop"
+      )
+    complete <- stats::na.omit(correlation_data[selected])
+    correlations <- suppressWarnings(stats::cor(complete, use = "pairwise.complete.obs"))
+    cor_values <- stats::setNames(
+      as.numeric(correlations[comparison.columns, primary.column]),
+      comparison.columns
     )
-  complete <- stats::na.omit(correlation_data[selected])
-  correlations <- suppressWarnings(stats::cor(complete, use = "pairwise.complete.obs"))
-  cor_values <- stats::setNames(
-    as.numeric(correlations[comparison.columns, primary.column]),
-    comparison.columns
-  )
-  best_name <- names(which.max(abs(cor_values)))
-  best_value <- cor_values[[best_name]]
-  subtitle <- if (length(best_name) && is.finite(best_value)) {
-    paste0(
-      text$best_correlation, ": ", plot_class_label(best_name, language), " (",
-      if (best_value >= 0) "+" else "", sprintf("%.2f", best_value), ")"
-    )
-  } else {
-    text$unavailable_correlation
+    best_name <- names(which.max(abs(cor_values)))
+    best_value <- cor_values[[best_name]]
+    subtitle <- if (length(best_name) && is.finite(best_value)) {
+      paste0(
+        text$best_correlation, ": ", plot_class_label(best_name, language), " (",
+        if (best_value >= 0) "+" else "", sprintf("%.2f", best_value), ")"
+      )
+    } else {
+      text$unavailable_correlation
+    }
   }
 
   long <- tidyr::pivot_longer(
@@ -280,7 +284,11 @@ mesh.map <- function(
       geometry = sf::st_sfc(map_geometry, crs = sf::st_crs(data))
     )
   } else {
-    map_geometry <- suppressMessages(suppressWarnings(sf::st_union(sf::st_geometry(data))))
+    map_geometry <- if (exists("safe_st_union", mode = "function")) {
+      safe_st_union(sf::st_geometry(data))
+    } else {
+      suppressMessages(suppressWarnings(sf::st_union(sf::st_geometry(data))))
+    }
     map_data <- sf::st_sf(
       .MapValue = sum(data_table$.MapValue, na.rm = TRUE),
       geometry = sf::st_sfc(map_geometry, crs = sf::st_crs(data))

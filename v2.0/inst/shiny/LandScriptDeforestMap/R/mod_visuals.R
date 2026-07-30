@@ -55,6 +55,7 @@ visuals_ui <- function(id) {
             shiny::selectInput(ns("primary_column"), "Variável principal", choices = NULL, selected = "Deforestation"),
             shiny::selectizeInput(ns("comparison_columns"), "Variáveis comparadas", choices = NULL, multiple = TRUE),
             shiny::selectInput(ns("chart_group"), "Agrupar por:", choices = c("Sem agrupamento" = "__none__")),
+            shiny::checkboxInput(ns("show_correlation"), "Mostrar correlação no gráfico", TRUE),
             shiny::textInput(ns("chart_colors"), "Cores das comparações", "purple, grey50, #EA9999, darkorange"),
             shiny::textInput(ns("primary_color"), "Cor da variável principal", "darkgreen"),
             shiny::textInput(ns("chart_title"), "Título", "Desmatamento e variação das classes"),
@@ -476,6 +477,7 @@ visuals_server <- function(id, automatic_result) {
         primary.color = parse_color_vector(input$primary_color)[[1]],
         title.name = chart_title_value(),
         different.group = chart_group,
+        show.correlation = !identical(input$show_correlation, FALSE),
         language = plot_language()
       )
     })

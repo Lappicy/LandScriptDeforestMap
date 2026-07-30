@@ -95,11 +95,41 @@ ensure_valid_polygon_geometry <- function(geo, context = "resultado", preserve_r
 }
 
 safe_st_union <- function(x, y = NULL) {
-  result <- if (is.null(y)) {
-    suppressMessages(suppressWarnings(sf::st_union(x)))
-  } else {
-    suppressMessages(suppressWarnings(sf::st_union(x, y)))
+  union_once <- function(x_value, y_value = NULL) {
+    if (is.null(y_value)) {
+      suppressMessages(suppressWarnings(sf::st_union(x_value)))
+    } else {
+      suppressMessages(suppressWarnings(sf::st_union(x_value, y_value)))
+    }
   }
+
+  result <- tryCatch(
+    union_once(x, y),
+    error = function(s2_error) {
+      # QGIS/GEOS can display some legacy result polygons that s2 rejects on
+      # longitude/latitude coordinates. Repair the inputs and retry this
+      # topological operation in planar GEOS mode, then validate the result
+      # again after the original s2 setting has been restored.
+      repaired_x <- repair_polygon_geometry(x)
+      repaired_y <- if (is.null(y)) NULL else repair_polygon_geometry(y)
+      planar_union <- function() {
+        previous_s2 <- sf::sf_use_s2()
+        suppressMessages(sf::sf_use_s2(FALSE))
+        on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
+        union_once(repaired_x, repaired_y)
+      }
+      tryCatch(
+        planar_union(),
+        error = function(planar_error) {
+          stop(
+            "Não foi possível unir as geometrias. s2: ", conditionMessage(s2_error),
+            "; GEOS: ", conditionMessage(planar_error),
+            call. = FALSE
+          )
+        }
+      )
+    }
+  )
   repair_polygon_geometry(result)
 }
 
