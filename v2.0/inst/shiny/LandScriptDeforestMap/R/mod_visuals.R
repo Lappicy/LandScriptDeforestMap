@@ -413,6 +413,15 @@ visuals_server <- function(id, automatic_result) {
           } else {
             paste0("Usando arquivo manual: ", source$selected %||% basename(manual_path()))
           }
+          mesh_size_label <- format_mesh_dimensions_km(
+            map_mesh_size_km(),
+            language = "pt-BR"
+          )
+          mesh_detail <- if (!is.null(mesh_size_label)) {
+            paste0(". Tamanho da malha: ", mesh_size_label)
+          } else {
+            ""
+          }
           if (!inherits(data, "sf")) {
             return(app_alert(
               paste0(origin, detail, ". Para criação de mapas, é necessário arquivo geoespacial."),
@@ -420,7 +429,7 @@ visuals_server <- function(id, automatic_result) {
             ))
           }
           app_alert(
-            paste0(origin, detail),
+            paste0(origin, detail, mesh_detail),
             color = "info"
           )
         }, error = function(e) {
@@ -429,7 +438,22 @@ visuals_server <- function(id, automatic_result) {
         return(status)
       }
       if (!is.null(automatic_result())) {
-        return(app_alert("Usando automaticamente o resultado da aba Executar análise.", color = "success"))
+        mesh_size_label <- format_mesh_dimensions_km(
+          map_mesh_size_km(),
+          language = "pt-BR"
+        )
+        mesh_detail <- if (!is.null(mesh_size_label)) {
+          paste0(" Tamanho da malha: ", mesh_size_label, ".")
+        } else {
+          ""
+        }
+        return(app_alert(
+          paste0(
+            "Usando automaticamente o resultado da aba Executar análise.",
+            mesh_detail
+          ),
+          color = "success"
+        ))
       }
       app_alert("Execute uma análise ou carregue um resultado anterior.", color = "secondary")
     })

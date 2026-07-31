@@ -340,6 +340,17 @@ format_mesh_dimension_km <- function(value, language = "pt-BR") {
   )
 }
 
+format_mesh_dimensions_km <- function(value, language = "pt-BR") {
+  dimensions <- normalize_mesh_dimensions_km(value)
+  if (is.null(dimensions)) return(NULL)
+  paste0(
+    format_mesh_dimension_km(dimensions[["width"]], language),
+    " × ",
+    format_mesh_dimension_km(dimensions[["height"]], language),
+    " km"
+  )
+}
+
 mesh.map <- function(
   mesh.data,
   class = "Deforestation",
@@ -392,16 +403,7 @@ mesh.map <- function(
   } else {
     normalize_mesh_dimensions_km(mesh.size.km)
   }
-  mesh_size_label <- if (!is.null(mesh_dimensions_km)) {
-    paste0(
-      format_mesh_dimension_km(mesh_dimensions_km[["width"]], language),
-      " × ",
-      format_mesh_dimension_km(mesh_dimensions_km[["height"]], language),
-      " km"
-    )
-  } else {
-    NULL
-  }
+  mesh_size_label <- format_mesh_dimensions_km(mesh_dimensions_km, language)
   available_years <- sort(unique(as.integer(as.character(data$Year))))
   if (length(year.used) == 1L && toupper(as.character(year.used)) == "ALL") {
     year.used <- available_years
@@ -578,7 +580,7 @@ mesh.map <- function(
         fill = "transparent",
         size = 0.01,
         alpha = 0,
-        show.legend = TRUE
+        show.legend = c(shape = TRUE, fill = FALSE, colour = FALSE)
       )
     }} +
     ggplot2::geom_sf(data = outline, fill = NA, color = "#17212b", linewidth = 0.7) +
