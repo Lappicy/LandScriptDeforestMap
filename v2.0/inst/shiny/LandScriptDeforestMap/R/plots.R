@@ -198,6 +198,148 @@ build_timeseries_plot <- function(
   plot
 }
 
+normalize_mesh_dimensions_km <- function(value) {
+  value <- suppressWarnings(as.numeric(value))
+  value <- value[is.finite(value) & value > 0]
+  if (!length(value)) return(NULL)
+  if (length(value) == 1L) value <- rep(value, 2L)
+  stats::setNames(value[seq_len(2L)], c("width", "height"))
+}
+
+infer_mesh_dimensions_km <- function(mesh.data, max_grid_ids = 2000L) {
+  if (!inherits(mesh.data, "sf") || !nrow(mesh.data)) return(NULL)
+
+  dimensions <- normalize_mesh_dimensions_km(
+    attr(mesh.data, "mesh_dimensions_km", exact = TRUE)
+  )
+  if (!is.null(dimensions)) return(dimensions)
+
+  size_km <- normalize_mesh_dimensions_km(
+    attr(mesh.data, "mesh_size_km", exact = TRUE)
+  )
+  if (!is.null(size_km)) return(size_km)
+
+  stored_size <- attr(mesh.data, "mesh_size", exact = TRUE)
+  stored_unit <- tolower(as.character(
+    attr(mesh.data, "mesh_unit", exact = TRUE) %||% ""
+  ))
+  if (length(stored_size) && length(stored_unit) &&
+      is.finite(suppressWarnings(as.numeric(stored_size[[1]])))) {
+    stored_size <- as.numeric(stored_size[[1]])
+    if (identical(stored_unit[[1]], "meters")) {
+      size_km <- normalize_mesh_dimensions_km(stored_size / 1000)
+      if (!is.null(size_km)) return(size_km)
+    }
+  }
+
+  size_columns <- intersect(
+    c("mesh_size_km", "Mesh_Size_km", "MeshSizeKm", "Tamanho_Malha_km"),
+    names(mesh.data)
+  )
+  for (column in size_columns) {
+    values <- suppressWarnings(as.numeric(mesh.data[[column]]))
+    values <- values[is.finite(values) & values > 0]
+    if (length(values)) {
+      size_km <- normalize_mesh_dimensions_km(stats::median(values))
+      if (!is.null(size_km)) return(size_km)
+    }
+  }
+
+  id_column <- if ("Grid_ID" %in% names(mesh.data)) {
+    "Grid_ID"
+  } else if ("ID_mesh" %in% names(mesh.data)) {
+    "ID_mesh"
+  } else {
+    NULL
+  }
+  if (is.null(id_column) || is.na(sf::st_crs(mesh.data))) return(NULL)
+
+  sample_data <- mesh.data
+  if ("Year" %in% names(sample_data)) {
+    years <- suppressWarnings(as.integer(as.character(sample_data$Year)))
+    first_year <- suppressWarnings(min(years, na.rm = TRUE))
+    if (is.finite(first_year)) {
+      sample_data <- sample_data[years == first_year, , drop = FALSE]
+    }
+  }
+  sample_data <- sample_data[!sf::st_is_empty(sample_data), , drop = FALSE]
+  if (!nrow(sample_data)) return(NULL)
+
+  ids <- unique(as.character(sample_data[[id_column]]))
+  ids <- ids[!is.na(ids) & nzchar(ids)]
+  if (!length(ids)) return(NULL)
+  max_grid_ids <- max(1L, as.integer(max_grid_ids))
+  if (length(ids) > max_grid_ids) {
+    selected <- unique(round(seq(1, length(ids), length.out = max_grid_ids)))
+    ids <- ids[selected]
+    sample_data <- sample_data[
+      as.character(sample_data[[id_column]]) %in% ids,
+      ,
+      drop = FALSE
+    ]
+  }
+
+  metric_data <- tryCatch(
+    suppressWarnings(sf::st_transform(sample_data, local_metric_crs(sample_data))),
+    error = function(e) NULL
+  )
+  if (is.null(metric_data) || !nrow(metric_data)) return(NULL)
+
+  boxes <- t(vapply(sf::st_geometry(metric_data), function(geometry) {
+    bbox <- sf::st_bbox(geometry)
+    c(
+      xmin = as.numeric(bbox[["xmin"]]),
+      ymin = as.numeric(bbox[["ymin"]]),
+      xmax = as.numeric(bbox[["xmax"]]),
+      ymax = as.numeric(bbox[["ymax"]])
+    )
+  }, numeric(4)))
+  box_data <- data.frame(
+    id = as.character(metric_data[[id_column]]),
+    boxes,
+    stringsAsFactors = FALSE
+  )
+  box_data <- box_data[stats::complete.cases(box_data), , drop = FALSE]
+  if (!nrow(box_data)) return(NULL)
+
+  extents <- lapply(split(box_data, box_data$id), function(rows) {
+    c(
+      width = max(rows$xmax) - min(rows$xmin),
+      height = max(rows$ymax) - min(rows$ymin)
+    )
+  })
+  extents <- do.call(rbind, extents)
+  dimensions_m <- as.numeric(extents)
+  dimensions_m <- dimensions_m[is.finite(dimensions_m) & dimensions_m > 0]
+  if (!length(dimensions_m)) return(NULL)
+
+  # create.mesh() always creates square cells. Border cells can be clipped by
+  # the study area, so the largest recovered side is the best estimate of the
+  # original, uncut square.
+  inferred_size_km <- max(dimensions_m) / 1000
+  normalize_mesh_dimensions_km(inferred_size_km)
+}
+
+format_mesh_dimension_km <- function(value, language = "pt-BR") {
+  value <- suppressWarnings(as.numeric(value))
+  if (!is.finite(value) || value <= 0) return(NA_character_)
+  digits <- if (abs(value - round(value)) < 0.005) {
+    0L
+  } else if (value >= 1) {
+    1L
+  } else {
+    2L
+  }
+  format(
+    round(value, digits),
+    nsmall = digits,
+    trim = TRUE,
+    scientific = FALSE,
+    decimal.mark = if (identical(language, "pt-BR")) "," else ".",
+    big.mark = ""
+  )
+}
+
 mesh.map <- function(
   mesh.data,
   class = "Deforestation",
@@ -209,8 +351,10 @@ mesh.map <- function(
   highlight = NULL,
   title = NULL,
   satellite = FALSE,
+  satellite.alpha = 1,
   fill.alpha = 1,
-  language = "pt-BR"
+  language = "pt-BR",
+  mesh.size.km = NULL
 ) {
   language <- normalize_plot_language(language)
   text <- if (language == "pt-BR") {
@@ -221,7 +365,8 @@ mesh.map <- function(
       accumulated = "Acumulado de",
       between = "entre",
       and = "e",
-      highlight = "Destaque"
+      highlight = "Destaque",
+      mesh_size = "Tamanho da malha"
     )
   } else {
     list(
@@ -231,7 +376,8 @@ mesh.map <- function(
       accumulated = "Accumulated",
       between = "from",
       and = "to",
-      highlight = "Highlight"
+      highlight = "Highlight",
+      mesh_size = "Mesh size"
     )
   }
   if (!inherits(mesh.data, "sf")) {
@@ -241,6 +387,21 @@ mesh.map <- function(
   if (!"Year" %in% names(mesh.data)) stop("A tabela precisa conter Year.", call. = FALSE)
 
   data <- mesh.data
+  mesh_dimensions_km <- if (is.null(mesh.size.km)) {
+    infer_mesh_dimensions_km(data)
+  } else {
+    normalize_mesh_dimensions_km(mesh.size.km)
+  }
+  mesh_size_label <- if (!is.null(mesh_dimensions_km)) {
+    paste0(
+      format_mesh_dimension_km(mesh_dimensions_km[["width"]], language),
+      " × ",
+      format_mesh_dimension_km(mesh_dimensions_km[["height"]], language),
+      " km"
+    )
+  } else {
+    NULL
+  }
   available_years <- sort(unique(as.integer(as.character(data$Year))))
   if (length(year.used) == 1L && toupper(as.character(year.used)) == "ALL") {
     year.used <- available_years
@@ -360,10 +521,26 @@ mesh.map <- function(
       preserve_rows = TRUE
     )
   }
+  mesh_legend_seed <- NULL
+  if (!is.null(mesh_size_label) && nzchar(mesh_size_label)) {
+    map_bbox <- sf::st_bbox(map_data)
+    mesh_legend_seed <- sf::st_as_sf(
+      data.frame(
+        .MeshSize = factor(mesh_size_label, levels = mesh_size_label),
+        x = mean(c(map_bbox[["xmin"]], map_bbox[["xmax"]])),
+        y = mean(c(map_bbox[["ymin"]], map_bbox[["ymax"]]))
+      ),
+      coords = c("x", "y"),
+      crs = sf::st_crs(map_data)
+    )
+  }
 
   plot <- ggplot2::ggplot()
 
   if (isTRUE(satellite)) {
+    satellite.alpha <- suppressWarnings(as.numeric(satellite.alpha %||% 1)[[1]])
+    if (!is.finite(satellite.alpha)) satellite.alpha <- 1
+    satellite.alpha <- max(0, min(1, satellite.alpha))
     esri_source <- paste0(
       "https://server.arcgisonline.com/ArcGIS/rest/services/",
       "World_Imagery/MapServer/tile/${z}/${y}/${x}.jpg"
@@ -372,7 +549,8 @@ mesh.map <- function(
       type = esri_source,
       zoomin = -1,
       progress = "none",
-      quiet = TRUE
+      quiet = TRUE,
+      alpha = satellite.alpha
     )
   }
 
@@ -392,6 +570,17 @@ mesh.map <- function(
       alpha = 0,
       show.legend = TRUE
     ) +
+    {if (!is.null(mesh_legend_seed)) {
+      ggplot2::geom_sf(
+        data = mesh_legend_seed,
+        ggplot2::aes(shape = .data$.MeshSize),
+        color = "transparent",
+        fill = "transparent",
+        size = 0.01,
+        alpha = 0,
+        show.legend = TRUE
+      )
+    }} +
     ggplot2::geom_sf(data = outline, fill = NA, color = "#17212b", linewidth = 0.7) +
     ggplot2::scale_fill_manual(
       values = col.used,
@@ -401,6 +590,15 @@ mesh.map <- function(
       na.value = "grey85",
       na.translate = FALSE
     ) +
+    {if (!is.null(mesh_legend_seed)) {
+      ggplot2::scale_shape_manual(
+        name = text$mesh_size,
+        values = stats::setNames(22, mesh_size_label),
+        limits = mesh_size_label,
+        breaks = mesh_size_label,
+        drop = FALSE
+      )
+    }} +
     ggplot2::labs(
       title = title %||% if (length(year.used) == 1L) {
         paste(class_label, text$in_year, year.used)
@@ -433,16 +631,29 @@ mesh.map <- function(
     ggplot2::theme_bw(base_size = 11) +
     ggplot2::guides(
       fill = ggplot2::guide_legend(
+        order = 1,
         override.aes = list(
           fill = legend_fills,
           colour = "black",
           linewidth = 0.6,
           alpha = 1
         )
+      ),
+      shape = ggplot2::guide_legend(
+        order = 2,
+        override.aes = list(
+          shape = 22,
+          fill = "black",
+          colour = "black",
+          alpha = 1,
+          size = 4,
+          stroke = 0.6
+        )
       )
     ) +
     ggplot2::theme(
       legend.position = "right",
+      legend.box = "vertical",
       legend.key = ggplot2::element_rect(colour = "black", linewidth = 0.45),
       plot.title = ggplot2::element_text(face = "bold"),
       panel.grid.major = ggplot2::element_line(color = "grey90")

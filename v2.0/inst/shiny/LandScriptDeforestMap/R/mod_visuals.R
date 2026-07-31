@@ -78,6 +78,7 @@ visuals_ui <- function(id) {
             shiny::checkboxInput(ns("map_satellite"), "Mostrar fundo de satélite (Esri)", TRUE),
             shiny::conditionalPanel(
               condition = sprintf("input['%s']", ns("map_satellite")),
+              shiny::sliderInput(ns("map_satellite_alpha"), "Opacidade do mapa Esri", min = 0, max = 1, value = 1, step = 0.05),
               shiny::sliderInput(ns("map_fill_alpha"), "Opacidade das classes", min = 0.1, max = 1, value = 0.65, step = 0.05)
             ),
             shiny::selectInput(ns("map_class"), "Classe analisada", choices = NULL, selected = "Deforestation"),
@@ -344,6 +345,44 @@ visuals_server <- function(id, automatic_result) {
       result_table_data(current_data())
     })
 
+    map_mesh_size_km <- shiny::reactive({
+      if (!is.null(manual_path())) {
+        current_spatial_data <- tryCatch(current_data(), error = function(e) NULL)
+        current_dimensions <- infer_mesh_dimensions_km(current_spatial_data)
+        if (!is.null(current_dimensions)) return(current_dimensions)
+
+        catalog <- manual_level_catalog()
+        mesh_entry <- catalog[catalog$level == "mesh", , drop = FALSE]
+        if (!nrow(mesh_entry)) return(NULL)
+        mesh_data <- tryCatch(
+          read_result_dataset(
+            mesh_entry$path[[1]],
+            layer = mesh_entry$source[[1]]
+          ),
+          error = function(e) NULL
+        )
+        return(infer_mesh_dimensions_km(mesh_data))
+      }
+
+      result <- automatic_result()
+      if (is.null(result)) return(NULL)
+      if (!is.null(result$mesh_size_km)) {
+        return(result$mesh_size_km)
+      }
+      current_dimensions <- infer_mesh_dimensions_km(
+        tryCatch(current_data(), error = function(e) NULL)
+      )
+      if (!is.null(current_dimensions)) return(current_dimensions)
+      if ("mesh" %in% analysis_result_levels(result)) {
+        mesh_data <- tryCatch(
+          load_analysis_result_level(result, "mesh"),
+          error = function(e) NULL
+        )
+        return(infer_mesh_dimensions_km(mesh_data))
+      }
+      NULL
+    })
+
     output$source_status <- shiny::renderUI({
       if (!is.null(manual_error())) {
         return(app_alert(manual_error(), color = "danger"))
@@ -508,8 +547,10 @@ visuals_server <- function(id, automatic_result) {
         highlight = input$highlight,
         title = if (nzchar(trimws(input$map_title %||% ""))) input$map_title else NULL,
         satellite = isTRUE(input$map_satellite),
+        satellite.alpha = input$map_satellite_alpha %||% 1,
         fill.alpha = if (isTRUE(input$map_satellite)) input$map_fill_alpha %||% 0.65 else 1,
-        language = plot_language()
+        language = plot_language(),
+        mesh.size.km = map_mesh_size_km()
       )
     })
 

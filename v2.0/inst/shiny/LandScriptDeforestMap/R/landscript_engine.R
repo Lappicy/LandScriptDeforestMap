@@ -985,6 +985,7 @@ analysis_result_pointer <- function(result, result_path = NULL) {
     year_min = if (length(years)) min(years) else NA_integer_,
     year_max = if (length(years)) max(years) else NA_integer_,
     raster_count = if (is.null(result$raster_index)) 0L else nrow(result$raster_index),
+    mesh_size_km = result$mesh_size_km %||% NULL,
     group_column = group_columns,
     group_columns = group_columns,
     summary_class_columns = result$summary_class_columns %||% character(),
@@ -1532,6 +1533,13 @@ run_land_analysis <- function(params, progress_file = NULL) {
     total = total_results,
     complete_table = complete_table,
     raster_index = raster_index,
+    mesh_size_km = if (isTRUE(params$no_mesh) || is.null(params$mesh_size)) {
+      NA_real_
+    } else if (identical(params$mesh_unit %||% "degrees", "meters")) {
+      as.numeric(params$mesh_size) / 1000
+    } else {
+      NULL
+    },
     group_column = group_columns,
     group_columns = group_columns,
     summary_class_columns = summary_class_columns,
