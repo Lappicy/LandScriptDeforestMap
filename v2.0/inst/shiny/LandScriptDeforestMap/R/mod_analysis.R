@@ -87,7 +87,8 @@ analysis_ui <- function(id) {
               "MapBiomas - Coleção 4" = "4",
               "MapBiomas - Coleção 7.1" = "7.1",
               "MapBiomas - Coleção 8" = "8",
-              "MapBiomas - Coleção 10" = "10"
+              "MapBiomas - Coleção 10" = "10",
+              "MapBiomas - Coleção 11" = "11"
             ),
             selected = "none"
           ),

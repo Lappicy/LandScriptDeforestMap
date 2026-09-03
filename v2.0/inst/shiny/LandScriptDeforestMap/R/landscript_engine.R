@@ -28,6 +28,16 @@ mapbiomas_class_map <- function(version = NULL, custom = NULL) {
       Water = c(26, 31, 33), Others = c(0, 27), Urban = 24, Mining = 30,
       CropLivestock = 14, Pasture = 15,
       Agriculture = c(9, 18, 19, 20, 21, 35, 36, 39, 40, 41, 46, 47, 48, 62)
+    ),
+    # Código e descrição conferidos em legend_code_mapbiomas_brazil_collection_11.csv.
+    # A definição de "Forest" mantém a regra das coleções anteriores: a
+    # Formação Florestal (classe 3) é a referência para desmatamento.
+    `11` = list(
+      Forest = 3,
+      NonForest = c(4, 5, 6, 7, 49, 12, 77, 11, 84, 50, 32, 29, 15, 39, 20, 40, 62, 41, 46, 47, 35, 48, 9, 21, 23, 24, 30, 75, 91, 25),
+      Water = c(31, 33), Others = c(0, 27), Urban = 24, Mining = 30,
+      Pasture = 15,
+      Agriculture = c(9, 20, 21, 35, 39, 40, 41, 46, 47, 48, 62)
     )
   )
 
