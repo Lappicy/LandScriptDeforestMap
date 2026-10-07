@@ -56,9 +56,10 @@ visuals_ui <- function(id) {
             shiny::selectizeInput(ns("comparison_columns"), "Variáveis comparadas", choices = NULL, multiple = TRUE),
             shiny::selectInput(ns("chart_group"), "Agrupar por:", choices = c("Sem agrupamento" = "__none__")),
             shiny::checkboxInput(ns("show_correlation"), "Mostrar correlação no gráfico", TRUE),
+            shiny::checkboxInput(ns("chart_legend_title"), "Mostrar título da legenda", TRUE),
             shiny::textInput(ns("chart_colors"), "Cores das comparações", "purple, grey50, #EA9999, darkorange"),
             shiny::textInput(ns("primary_color"), "Cor da variável principal", "darkgreen"),
-            shiny::textInput(ns("chart_title"), "Título", "Desmatamento e variação das classes"),
+            shiny::textInput(ns("chart_title"), "Título (opcional)", "Desmatamento e variação das classes"),
             shiny::selectInput(ns("chart_format"), "Formato", c("PNG" = "png", "PDF" = "pdf")),
             shiny::numericInput(ns("chart_width"), "Largura (mm)", 254, min = 50, step = 10),
             shiny::numericInput(ns("chart_height"), "Altura (mm)", 140, min = 50, step = 10),
@@ -88,6 +89,13 @@ visuals_ui <- function(id) {
             shiny::selectInput(ns("map_group"), "Coluna de agrupamento", choices = c("Nenhuma" = "")),
             shiny::selectInput(ns("highlight"), "Classe a destacar", choices = c("Nenhuma" = "")),
             shiny::textInput(ns("map_title"), "Título (opcional)", ""),
+            shiny::checkboxInput(ns("map_legend_title"), "Mostrar títulos das legendas", TRUE),
+            shiny::selectInput(
+              ns("map_north_arrow"),
+              "Posição da seta norte",
+              choices = c("Superior esquerdo" = "tl", "Superior direito" = "tr"),
+              selected = "tl"
+            ),
             shiny::selectInput(ns("map_format"), "Formato", c("PNG" = "png", "PDF" = "pdf")),
             shiny::numericInput(ns("map_width"), "Largura (mm)", 230, min = 50, step = 10),
             shiny::numericInput(ns("map_height"), "Altura (mm)", 180, min = 50, step = 10),
@@ -154,7 +162,7 @@ visuals_server <- function(id, automatic_result) {
     )
     shiny::observeEvent(plot_language(), {
       current_title <- trimws(input$chart_title %||% "")
-      if (!nzchar(current_title) || current_title %in% unname(default_chart_titles)) {
+      if (current_title %in% unname(default_chart_titles)) {
         shiny::updateTextInput(
           session,
           "chart_title",
@@ -165,7 +173,7 @@ visuals_server <- function(id, automatic_result) {
 
     chart_title_value <- shiny::reactive({
       current_title <- trimws(input$chart_title %||% "")
-      if (!nzchar(current_title) || current_title %in% unname(default_chart_titles)) {
+      if (current_title %in% unname(default_chart_titles)) {
         return(unname(default_chart_titles[[plot_language()]]))
       }
       current_title
@@ -541,7 +549,8 @@ visuals_server <- function(id, automatic_result) {
         title.name = chart_title_value(),
         different.group = chart_group,
         show.correlation = !identical(input$show_correlation, FALSE),
-        language = plot_language()
+        language = plot_language(),
+        show.legend.title = !identical(input$chart_legend_title, FALSE)
       )
     })
 
@@ -569,12 +578,14 @@ visuals_server <- function(id, automatic_result) {
         grid.color = "#17212B66",
         classes.column = input$map_group,
         highlight = input$highlight,
-        title = if (nzchar(trimws(input$map_title %||% ""))) input$map_title else NULL,
+        title = trimws(input$map_title %||% ""),
         satellite = isTRUE(input$map_satellite),
         satellite.alpha = input$map_satellite_alpha %||% 1,
         fill.alpha = if (isTRUE(input$map_satellite)) input$map_fill_alpha %||% 0.65 else 1,
         language = plot_language(),
-        mesh.size.km = map_mesh_size_km()
+        mesh.size.km = map_mesh_size_km(),
+        show.legend.title = !identical(input$map_legend_title, FALSE),
+        north.arrow.location = input$map_north_arrow %||% "tl"
       )
     })
 

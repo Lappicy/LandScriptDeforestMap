@@ -74,7 +74,8 @@ build_timeseries_plot <- function(
   title.name = NULL,
   different.group = NULL,
   show.correlation = TRUE,
-  language = "pt-BR"
+  language = "pt-BR",
+  show.legend.title = TRUE
 ) {
   language <- normalize_plot_language(language)
   text <- if (language == "pt-BR") {
@@ -94,8 +95,10 @@ build_timeseries_plot <- function(
       unavailable_correlation = "Correlation unavailable for the selected data"
     )
   }
-  if (is.null(title.name) || !nzchar(trimws(title.name))) {
+  if (is.null(title.name)) {
     title.name <- text$default_title
+  } else if (!nzchar(trimws(title.name))) {
+    title.name <- NULL
   }
 
   data <- if (inherits(proxy.table, "sf")) sf::st_drop_geometry(proxy.table) else as.data.frame(proxy.table)
@@ -187,6 +190,7 @@ build_timeseries_plot <- function(
     ggplot2::theme_bw(base_size = 12) +
     ggplot2::theme(
       legend.position = "top",
+      legend.title = if (isTRUE(show.legend.title)) ggplot2::element_text() else ggplot2::element_blank(),
       plot.title = ggplot2::element_text(face = "bold"),
       panel.grid.minor = ggplot2::element_blank()
     )
@@ -365,8 +369,11 @@ mesh.map <- function(
   satellite.alpha = 1,
   fill.alpha = 1,
   language = "pt-BR",
-  mesh.size.km = NULL
+  mesh.size.km = NULL,
+  show.legend.title = TRUE,
+  north.arrow.location = c("tl", "tr")
 ) {
+  north.arrow.location <- match.arg(north.arrow.location)
   language <- normalize_plot_language(language)
   text <- if (language == "pt-BR") {
     list(
@@ -473,6 +480,18 @@ mesh.map <- function(
   col.used <- rep(col.used, length.out = required_colors)
   class_label <- plot_class_label(class, language)
   class_label_lower <- tolower(class_label)
+  if (is.null(title)) {
+    title <- if (length(year.used) == 1L) {
+      paste(class_label, text$in_year, year.used)
+    } else {
+      paste(
+        text$accumulated, class_label_lower, text$between,
+        min(year.used), text$and, max(year.used)
+      )
+    }
+  } else if (!nzchar(trimws(title))) {
+    title <- NULL
+  }
 
   breaks <- c(-Inf, 0, col.limits, Inf)
   labels <- c(
@@ -602,14 +621,7 @@ mesh.map <- function(
       )
     }} +
     ggplot2::labs(
-      title = title %||% if (length(year.used) == 1L) {
-        paste(class_label, text$in_year, year.used)
-      } else {
-        paste(
-          text$accumulated, class_label_lower, text$between,
-          min(year.used), text$and, max(year.used)
-        )
-      },
+      title = title,
       subtitle = if (!is.null(highlight) && nzchar(highlight)) {
         paste0(text$highlight, ": ", highlight)
       } else {
@@ -621,7 +633,7 @@ mesh.map <- function(
     ) +
     ggspatial::annotation_scale(location = "br", bar_cols = c("black", "white")) +
     ggspatial::annotation_north_arrow(
-      location = "tl",
+      location = north.arrow.location,
       which_north = "true",
       height = grid::unit(1, "cm"),
       width = grid::unit(1, "cm"),
@@ -655,6 +667,7 @@ mesh.map <- function(
     ) +
     ggplot2::theme(
       legend.position = "right",
+      legend.title = if (isTRUE(show.legend.title)) ggplot2::element_text() else ggplot2::element_blank(),
       legend.box = "vertical",
       legend.key = ggplot2::element_rect(colour = "black", linewidth = 0.45),
       plot.title = ggplot2::element_text(face = "bold"),
