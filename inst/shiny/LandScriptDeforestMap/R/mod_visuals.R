@@ -55,9 +55,11 @@ visuals_ui <- function(id) {
             shiny::selectInput(ns("primary_column"), "Variável principal", choices = NULL, selected = "Deforestation"),
             shiny::selectizeInput(ns("comparison_columns"), "Variáveis comparadas", choices = NULL, multiple = TRUE),
             shiny::selectInput(ns("chart_group"), "Agrupar por:", choices = c("Sem agrupamento" = "__none__")),
+            shiny::checkboxInput(ns("show_correlation"), "Mostrar correlação no gráfico", TRUE),
+            shiny::checkboxInput(ns("chart_legend_title"), "Mostrar título da legenda", TRUE),
             shiny::textInput(ns("chart_colors"), "Cores das comparações", "purple, grey50, #EA9999, darkorange"),
             shiny::textInput(ns("primary_color"), "Cor da variável principal", "darkgreen"),
-            shiny::textInput(ns("chart_title"), "Título", "Desmatamento e variação das classes"),
+            shiny::textInput(ns("chart_title"), "Título (opcional)", "Desmatamento e variação das classes"),
             shiny::selectInput(ns("chart_format"), "Formato", c("PNG" = "png", "PDF" = "pdf")),
             shiny::numericInput(ns("chart_width"), "Largura (mm)", 254, min = 50, step = 10),
             shiny::numericInput(ns("chart_height"), "Altura (mm)", 140, min = 50, step = 10),
@@ -77,6 +79,7 @@ visuals_ui <- function(id) {
             shiny::checkboxInput(ns("map_satellite"), "Mostrar fundo de satélite (Esri)", TRUE),
             shiny::conditionalPanel(
               condition = sprintf("input['%s']", ns("map_satellite")),
+              shiny::sliderInput(ns("map_satellite_alpha"), "Opacidade do mapa Esri", min = 0, max = 1, value = 1, step = 0.05),
               shiny::sliderInput(ns("map_fill_alpha"), "Opacidade das classes", min = 0.1, max = 1, value = 0.65, step = 0.05)
             ),
             shiny::selectInput(ns("map_class"), "Classe analisada", choices = NULL, selected = "Deforestation"),
@@ -86,6 +89,13 @@ visuals_ui <- function(id) {
             shiny::selectInput(ns("map_group"), "Coluna de agrupamento", choices = c("Nenhuma" = "")),
             shiny::selectInput(ns("highlight"), "Classe a destacar", choices = c("Nenhuma" = "")),
             shiny::textInput(ns("map_title"), "Título (opcional)", ""),
+            shiny::checkboxInput(ns("map_legend_title"), "Mostrar títulos das legendas", TRUE),
+            shiny::selectInput(
+              ns("map_north_arrow"),
+              "Posição da seta norte",
+              choices = c("Superior esquerdo" = "tl", "Superior direito" = "tr"),
+              selected = "tl"
+            ),
             shiny::selectInput(ns("map_format"), "Formato", c("PNG" = "png", "PDF" = "pdf")),
             shiny::numericInput(ns("map_width"), "Largura (mm)", 230, min = 50, step = 10),
             shiny::numericInput(ns("map_height"), "Altura (mm)", 180, min = 50, step = 10),
@@ -104,6 +114,7 @@ visuals_ui <- function(id) {
 visuals_server <- function(id, automatic_result) {
   shiny::moduleServer(id, function(input, output, session) {
     manual_path <- shiny::reactiveVal(NULL)
+    manual_files <- shiny::reactiveVal(character())
     manual_layers <- shiny::reactiveVal(NULL)
     manual_error <- shiny::reactiveVal(NULL)
     manual_source <- shiny::reactiveVal(NULL)
@@ -151,7 +162,7 @@ visuals_server <- function(id, automatic_result) {
     )
     shiny::observeEvent(plot_language(), {
       current_title <- trimws(input$chart_title %||% "")
-      if (!nzchar(current_title) || current_title %in% unname(default_chart_titles)) {
+      if (current_title %in% unname(default_chart_titles)) {
         shiny::updateTextInput(
           session,
           "chart_title",
@@ -162,7 +173,7 @@ visuals_server <- function(id, automatic_result) {
 
     chart_title_value <- shiny::reactive({
       current_title <- trimws(input$chart_title %||% "")
-      if (!nzchar(current_title) || current_title %in% unname(default_chart_titles)) {
+      if (current_title %in% unname(default_chart_titles)) {
         return(unname(default_chart_titles[[plot_language()]]))
       }
       current_title
@@ -185,6 +196,7 @@ visuals_server <- function(id, automatic_result) {
         extensions <- tolower(tools::file_ext(upload$name))
         selected_path <- NULL
         extension <- NULL
+        source_files <- character()
 
         if (length(upload$name) == 1L && extensions[[1]] == "zip") {
           path <- copy_upload_to_named_file(upload, upload_dir)
@@ -193,6 +205,7 @@ visuals_server <- function(id, automatic_result) {
           selected <- select_preferred_result_file(extracted)
           selected_path <- selected$path
           extension <- tolower(tools::file_ext(selected_path))
+          source_files <- extracted
           source <- list(
             uploaded = basename(path),
             selected = basename(selected_path),
@@ -203,6 +216,7 @@ visuals_server <- function(id, automatic_result) {
           vector_dir <- file.path(upload_dir, paste0("vector_", as.integer(Sys.time())))
           selected_path <- stage_uploaded_vector(upload, vector_dir)
           extension <- tolower(tools::file_ext(selected_path))
+          source_files <- selected_path
           source <- list(
             uploaded = paste(upload$name, collapse = ", "),
             selected = basename(selected_path),
@@ -213,6 +227,7 @@ visuals_server <- function(id, automatic_result) {
           path <- copy_upload_to_named_file(upload, upload_dir)
           selected_path <- path
           extension <- tolower(tools::file_ext(path))
+          source_files <- path
         }
 
         if (extension == "gpkg") {
@@ -257,14 +272,57 @@ visuals_server <- function(id, automatic_result) {
         }
 
         manual_path(selected_path)
+        manual_files(source_files)
         manual_source(source)
       }, error = function(e) {
         manual_error(conditionMessage(e))
         manual_path(NULL)
+        manual_files(character())
         manual_source(NULL)
         manual_kind(NULL)
       })
     })
+
+    manual_level_catalog <- shiny::reactive({
+      result_level_catalog(manual_files())
+    })
+
+    available_chart_levels <- shiny::reactive({
+      if (!is.null(manual_path())) {
+        return(manual_level_catalog()$level)
+      }
+      result <- automatic_result()
+      if (is.null(result)) return(character())
+      analysis_result_levels(result)
+    })
+
+    chart_known_group_columns <- function() {
+      if (!is.null(manual_path())) return(character())
+      result <- automatic_result()
+      if (is.null(result)) return(character())
+      normalize_group_columns(
+        result$group_columns %||% result$group_column %||% character(),
+        max_columns = 2L
+      )
+    }
+
+    load_chart_result_level <- function(level) {
+      level <- canonical_result_level(level)[[1]]
+      if (is.na(level)) stop("Nível de resultado inválido para o gráfico.", call. = FALSE)
+
+      if (!is.null(manual_path())) {
+        catalog <- manual_level_catalog()
+        entry <- catalog[catalog$level == level, , drop = FALSE]
+        if (!nrow(entry)) {
+          stop("O nível selecionado não existe no arquivo carregado.", call. = FALSE)
+        }
+        return(read_result_dataset(entry$path[[1]], layer = entry$source[[1]]))
+      }
+
+      result <- automatic_result()
+      shiny::req(result)
+      load_analysis_result_level(result, level)
+    }
 
     current_data <- shiny::reactive({
       if (!is.null(manual_path())) {
@@ -272,15 +330,65 @@ visuals_server <- function(id, automatic_result) {
       }
       result <- automatic_result()
       shiny::req(result)
-      level <- input$auto_level %||% if ("grid" %in% names(result)) "grid" else "mesh"
-      if (!level %in% names(result) || is.null(result[[level]])) {
-        level <- if ("grid" %in% names(result)) "grid" else "mesh"
+      levels <- analysis_result_levels(result)
+      shiny::req(length(levels))
+      level <- input$auto_level %||% if ("grid" %in% levels) "grid" else levels[[1]]
+      if (!level %in% levels) {
+        level <- if ("grid" %in% levels) "grid" else levels[[1]]
       }
-      result[[level]]
+      load_analysis_result_level(result, level)
     })
+
+    shiny::observeEvent(automatic_result(), {
+      result <- automatic_result()
+      if (is.null(result)) return()
+      levels <- analysis_result_levels(result)
+      if (!length(levels)) return()
+      labels <- analysis_level_labels()[levels]
+      selected <- if ("grid" %in% levels) "grid" else levels[[1]]
+      shiny::updateSelectInput(session, "auto_level", choices = labels, selected = selected)
+    }, ignoreNULL = TRUE)
 
     current_table <- shiny::reactive({
       result_table_data(current_data())
+    })
+
+    map_mesh_size_km <- shiny::reactive({
+      if (!is.null(manual_path())) {
+        current_spatial_data <- tryCatch(current_data(), error = function(e) NULL)
+        current_dimensions <- infer_mesh_dimensions_km(current_spatial_data)
+        if (!is.null(current_dimensions)) return(current_dimensions)
+
+        catalog <- manual_level_catalog()
+        mesh_entry <- catalog[catalog$level == "mesh", , drop = FALSE]
+        if (!nrow(mesh_entry)) return(NULL)
+        mesh_data <- tryCatch(
+          read_result_dataset(
+            mesh_entry$path[[1]],
+            layer = mesh_entry$source[[1]]
+          ),
+          error = function(e) NULL
+        )
+        return(infer_mesh_dimensions_km(mesh_data))
+      }
+
+      result <- automatic_result()
+      if (is.null(result)) return(NULL)
+      if (!is.null(result$mesh_size_km)) {
+        return(result$mesh_size_km)
+      }
+      current_dimensions <- infer_mesh_dimensions_km(
+        tryCatch(current_data(), error = function(e) NULL)
+      )
+      if (!is.null(current_dimensions)) return(current_dimensions)
+      if ("mesh" %in% analysis_result_levels(result)) {
+        mesh_data <- tryCatch(
+          load_analysis_result_level(result, "mesh"),
+          error = function(e) NULL
+        )
+        return(infer_mesh_dimensions_km(mesh_data))
+      }
+      NULL
     })
 
     output$source_status <- shiny::renderUI({
@@ -313,6 +421,15 @@ visuals_server <- function(id, automatic_result) {
           } else {
             paste0("Usando arquivo manual: ", source$selected %||% basename(manual_path()))
           }
+          mesh_size_label <- format_mesh_dimensions_km(
+            map_mesh_size_km(),
+            language = "pt-BR"
+          )
+          mesh_detail <- if (!is.null(mesh_size_label)) {
+            paste0(". Tamanho da malha: ", mesh_size_label)
+          } else {
+            ""
+          }
           if (!inherits(data, "sf")) {
             return(app_alert(
               paste0(origin, detail, ". Para criação de mapas, é necessário arquivo geoespacial."),
@@ -320,7 +437,7 @@ visuals_server <- function(id, automatic_result) {
             ))
           }
           app_alert(
-            paste0(origin, detail),
+            paste0(origin, detail, mesh_detail),
             color = "info"
           )
         }, error = function(e) {
@@ -329,7 +446,22 @@ visuals_server <- function(id, automatic_result) {
         return(status)
       }
       if (!is.null(automatic_result())) {
-        return(app_alert("Usando automaticamente o resultado da aba Executar análise.", color = "success"))
+        mesh_size_label <- format_mesh_dimensions_km(
+          map_mesh_size_km(),
+          language = "pt-BR"
+        )
+        mesh_detail <- if (!is.null(mesh_size_label)) {
+          paste0(" Tamanho da malha: ", mesh_size_label, ".")
+        } else {
+          ""
+        }
+        return(app_alert(
+          paste0(
+            "Usando automaticamente o resultado da aba Executar análise.",
+            mesh_detail
+          ),
+          color = "success"
+        ))
       }
       app_alert("Execute uma análise ou carregue um resultado anterior.", color = "secondary")
     })
@@ -351,12 +483,10 @@ visuals_server <- function(id, automatic_result) {
 
       years <- if ("Year" %in% names(data)) sort(unique(as.integer(as.character(data$Year)))) else integer()
 
-      non_numeric <- names(data)[
-        !vapply(data, is.numeric, logical(1))
-      ]
-      non_numeric <- setdiff(non_numeric, c("AnalysisLevel"))
+      group_columns <- result_group_columns(data)
+      levels <- available_chart_levels()
       current_chart_group <- input$chart_group %||% "__none__"
-      chart_group_choices <- c("Sem agrupamento" = "__none__", stats::setNames(non_numeric, non_numeric))
+      chart_group_choices <- chart_grouping_choices(levels, group_columns)
       shiny::updateSelectInput(
         session,
         "chart_group",
@@ -368,7 +498,7 @@ visuals_server <- function(id, automatic_result) {
       if (inherits(spatial_data, "sf")) {
         shiny::updateSelectInput(session, "map_class", choices = numeric_columns, selected = default_primary)
         shiny::updateSelectizeInput(session, "map_years", choices = years, selected = years, server = TRUE)
-        shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = "", stats::setNames(non_numeric, non_numeric)))
+        shiny::updateSelectInput(session, "map_group", choices = c("Nenhuma" = "", stats::setNames(group_columns, group_columns)))
       } else {
         shiny::updateSelectInput(session, "map_class", choices = character(), selected = character())
         shiny::updateSelectizeInput(session, "map_years", choices = character(), selected = character(), server = TRUE)
@@ -389,9 +519,27 @@ visuals_server <- function(id, automatic_result) {
     })
 
     chart_object <- shiny::reactive({
+      selection <- input$chart_group %||% "__none__"
       data <- current_table()
-      chart_group <- input$chart_group %||% "__none__"
-      if (identical(chart_group, "__none__")) chart_group <- NULL
+      chart_group <- NULL
+
+      if (startsWith(selection, "__level__:")) {
+        level <- sub("^__level__:", "", selection)
+        level_data <- load_chart_result_level(level)
+        prepared <- prepare_chart_level_data(
+          level_data,
+          level = level,
+          known_group_columns = chart_known_group_columns()
+        )
+        data <- prepared$data
+        chart_group <- prepared$group
+      } else if (startsWith(selection, "__column__:")) {
+        chart_group <- sub("^__column__:", "", selection)
+        if (!chart_group %in% names(data)) {
+          stop("A coluna de agrupamento selecionada não existe neste resultado.", call. = FALSE)
+        }
+      }
+
       build_timeseries_plot(
         data,
         comparison.columns = input$comparison_columns,
@@ -400,7 +548,9 @@ visuals_server <- function(id, automatic_result) {
         primary.color = parse_color_vector(input$primary_color)[[1]],
         title.name = chart_title_value(),
         different.group = chart_group,
-        language = plot_language()
+        show.correlation = !identical(input$show_correlation, FALSE),
+        language = plot_language(),
+        show.legend.title = !identical(input$chart_legend_title, FALSE)
       )
     })
 
@@ -428,10 +578,14 @@ visuals_server <- function(id, automatic_result) {
         grid.color = "#17212B66",
         classes.column = input$map_group,
         highlight = input$highlight,
-        title = if (nzchar(trimws(input$map_title %||% ""))) input$map_title else NULL,
+        title = trimws(input$map_title %||% ""),
         satellite = isTRUE(input$map_satellite),
+        satellite.alpha = input$map_satellite_alpha %||% 1,
         fill.alpha = if (isTRUE(input$map_satellite)) input$map_fill_alpha %||% 0.65 else 1,
-        language = plot_language()
+        language = plot_language(),
+        mesh.size.km = map_mesh_size_km(),
+        show.legend.title = !identical(input$map_legend_title, FALSE),
+        north.arrow.location = input$map_north_arrow %||% "tl"
       )
     })
 

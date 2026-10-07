@@ -1,5 +1,5 @@
 drop_zm_geometry <- function(geo) {
-  if (!inherits(geo, "sf")) return(geo)
+  if (!inherits(geo, c("sf", "sfc", "sfg"))) return(geo)
   tryCatch(
     sf::st_zm(geo, drop = TRUE, what = "ZM"),
     error = function(e) geo
@@ -10,10 +10,51 @@ repair_polygon_geometry <- function(geo) {
   if (!inherits(geo, c("sf", "sfc", "sfg"))) return(geo)
   if (inherits(geo, "sfg")) geo <- sf::st_sfc(geo)
 
+  initial_validity <- tryCatch(
+    suppressWarnings(sf::st_is_valid(geo)),
+    error = function(e) rep(FALSE, length(sf::st_geometry(geo)))
+  )
+  initial_empty <- tryCatch(
+    sf::st_is_empty(geo),
+    error = function(e) rep(FALSE, length(initial_validity))
+  )
+  initial_types <- tryCatch(
+    as.character(sf::st_geometry_type(geo)),
+    error = function(e) character()
+  )
+  if (
+    length(initial_validity) &&
+    all(initial_validity & !is.na(initial_validity)) &&
+    !any(initial_empty) &&
+    length(initial_types) == length(initial_validity) &&
+    all(initial_types %in% c("POLYGON", "MULTIPOLYGON"))
+  ) {
+    return(drop_zm_geometry(geo))
+  }
+
   repaired <- tryCatch(
     suppressWarnings(sf::st_make_valid(geo)),
     error = function(e) geo
   )
+
+  # s2 can occasionally keep a spherical self-crossing after st_union() or a
+  # reprojection, even though the same polygon is repairable by GEOS. Run a
+  # planar validity pass only for the remaining invalid features, then return
+  # to the caller's original s2 setting.
+  validity <- tryCatch(
+    suppressWarnings(sf::st_is_valid(repaired)),
+    error = function(e) rep(FALSE, length(sf::st_geometry(repaired)))
+  )
+  if (any(!validity | is.na(validity))) {
+    previous_s2 <- sf::sf_use_s2()
+    suppressMessages(sf::sf_use_s2(FALSE))
+    repaired <- tryCatch(
+      suppressWarnings(sf::st_make_valid(repaired)),
+      error = function(e) repaired
+    )
+    suppressMessages(sf::sf_use_s2(previous_s2))
+  }
+
   repaired <- tryCatch(
     suppressWarnings(sf::st_collection_extract(repaired, "POLYGON")),
     error = function(e) repaired
@@ -32,12 +73,63 @@ repair_polygon_geometry <- function(geo) {
   repaired
 }
 
-safe_st_union <- function(x, y = NULL) {
-  result <- if (is.null(y)) {
-    suppressMessages(suppressWarnings(sf::st_union(x)))
-  } else {
-    suppressMessages(suppressWarnings(sf::st_union(x, y)))
+ensure_valid_polygon_geometry <- function(geo, context = "resultado", preserve_rows = TRUE) {
+  original_rows <- if (inherits(geo, "sf")) nrow(geo) else length(geo)
+  repaired <- repair_polygon_geometry(geo)
+  repaired_rows <- if (inherits(repaired, "sf")) nrow(repaired) else length(repaired)
+  if (isTRUE(preserve_rows) && !identical(original_rows, repaired_rows)) {
+    stop(
+      "A correção da geometria alteraria o número de registros em ", context, ".",
+      call. = FALSE
+    )
   }
+
+  validity <- tryCatch(
+    suppressWarnings(sf::st_is_valid(repaired)),
+    error = function(e) rep(FALSE, repaired_rows)
+  )
+  if (length(validity) != repaired_rows || any(!validity | is.na(validity))) {
+    stop("Não foi possível produzir geometrias válidas em ", context, ".", call. = FALSE)
+  }
+  repaired
+}
+
+safe_st_union <- function(x, y = NULL) {
+  union_once <- function(x_value, y_value = NULL) {
+    if (is.null(y_value)) {
+      suppressMessages(suppressWarnings(sf::st_union(x_value)))
+    } else {
+      suppressMessages(suppressWarnings(sf::st_union(x_value, y_value)))
+    }
+  }
+
+  result <- tryCatch(
+    union_once(x, y),
+    error = function(s2_error) {
+      # QGIS/GEOS can display some legacy result polygons that s2 rejects on
+      # longitude/latitude coordinates. Repair the inputs and retry this
+      # topological operation in planar GEOS mode, then validate the result
+      # again after the original s2 setting has been restored.
+      repaired_x <- repair_polygon_geometry(x)
+      repaired_y <- if (is.null(y)) NULL else repair_polygon_geometry(y)
+      planar_union <- function() {
+        previous_s2 <- sf::sf_use_s2()
+        suppressMessages(sf::sf_use_s2(FALSE))
+        on.exit(suppressMessages(sf::sf_use_s2(previous_s2)), add = TRUE)
+        union_once(repaired_x, repaired_y)
+      }
+      tryCatch(
+        planar_union(),
+        error = function(planar_error) {
+          stop(
+            "Não foi possível unir as geometrias. s2: ", conditionMessage(s2_error),
+            "; GEOS: ", conditionMessage(planar_error),
+            call. = FALSE
+          )
+        }
+      )
+    }
+  )
   repair_polygon_geometry(result)
 }
 
@@ -74,7 +166,13 @@ validate_shapefile_geometry <- function(file_name) {
   invisible(TRUE)
 }
 
-read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress = NULL) {
+read_geo <- function(
+  file_name,
+  projection_wanted = 4326,
+  layer = NULL,
+  progress = NULL,
+  reject_invalid = FALSE
+) {
   geo_progress(progress, 5, "Leitura do arquivo", "Abrindo arquivo geoespacial.")
   if (inherits(file_name, "sf")) {
     geo <- file_name
@@ -109,6 +207,9 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress
   geo_progress(progress, 34, "Verificação da geometria", "Checando se as feições são válidas.")
   valid_geometry <- suppressWarnings(sf::st_is_valid(geo))
   if (any(!valid_geometry | is.na(valid_geometry))) {
+    if (isTRUE(reject_invalid)) {
+      stop(invalid_geometry_message(), call. = FALSE)
+    }
     geo_progress(progress, 48, "Correção da geometria", "Corrigindo geometrias inválidas.")
     geo <- suppressWarnings(sf::st_make_valid(geo))
   }
@@ -134,6 +235,36 @@ read_geo <- function(file_name, projection_wanted = 4326, layer = NULL, progress
   attr(geo, "landscript_validated") <- TRUE
   geo_progress(progress, 84, "Arquivo preparado", "Geometria validada.")
   geo
+}
+
+preview_from_loaded_geo <- function(
+  geo,
+  projection_wanted = 4326,
+  simplify_tolerance_m = NULL,
+  tolerance_fraction = 0.001
+) {
+  if (!inherits(geo, "sf") || !nrow(geo)) {
+    stop("O arquivo geoespacial não contém feições.", call. = FALSE)
+  }
+  geo <- drop_zm_geometry(geo)
+  if (is.na(sf::st_crs(geo))) {
+    stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
+  }
+
+  # Simplify in the source CRS before reprojection. For large files this avoids
+  # transforming millions of vertices that will not be sent to Leaflet.
+  preview <- simplify_geo_preview(
+    geo,
+    tolerance_m = simplify_tolerance_m,
+    tolerance_fraction = tolerance_fraction
+  )
+  if (!identical(sf::st_crs(preview), sf::st_crs(projection_wanted))) {
+    preview <- suppressWarnings(sf::st_transform(preview, projection_wanted))
+  }
+  preview <- drop_zm_geometry(preview)
+  sf::st_geometry(preview) <- "geometry"
+  attr(preview, "landscript_preview_type") <- "simplified"
+  preview
 }
 
 preview_simplify_tolerance_degrees <- function(geo, tolerance_m) {
@@ -303,17 +434,9 @@ read_geo_preview <- function(
   if (!inherits(geo, "sf") || !nrow(geo)) {
     stop("O arquivo geoespacial não contém feições.", call. = FALSE)
   }
-  geo <- drop_zm_geometry(geo)
-  if (is.na(sf::st_crs(geo))) {
-    stop("O arquivo geoespacial não possui sistema de coordenadas (CRS).", call. = FALSE)
-  }
-  if (!identical(sf::st_crs(geo), sf::st_crs(projection_wanted))) {
-    geo <- suppressWarnings(sf::st_transform(geo, projection_wanted))
-  }
-  geo <- drop_zm_geometry(geo)
-  sf::st_geometry(geo) <- "geometry"
-  simplify_geo_preview(
+  preview_from_loaded_geo(
     geo,
+    projection_wanted = projection_wanted,
     tolerance_m = simplify_tolerance_m,
     tolerance_fraction = tolerance_fraction
   )
@@ -686,6 +809,7 @@ create.mesh <- function(
   if (identical(mesh.unit, "meters")) {
     mesh <- sf::st_transform(mesh, original_crs)
   }
+  mesh <- ensure_valid_polygon_geometry(mesh, "malha", preserve_rows = FALSE)
   mesh <- drop_zm_geometry(mesh)
   mesh$ID_mesh <- seq_len(nrow(mesh))
   for (column in group.columns) {
