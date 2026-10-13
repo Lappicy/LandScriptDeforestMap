@@ -49,7 +49,7 @@ plot_class_label <- function(x, language = "pt-BR") {
       base_label <- if (base %in% names(dictionary)) {
         unname(dictionary[[base]])
       } else {
-        gsub("_", " ", base, fixed = TRUE)
+        base
       }
       if (language == "pt-BR") {
         descriptor <- if (prefix == "Variation_") "Variação de " else "Crescimento de "
@@ -59,7 +59,7 @@ plot_class_label <- function(x, language = "pt-BR") {
       return(paste0(base_label, descriptor))
     }
 
-    gsub("_", " ", value, fixed = TRUE)
+    value
   }
 
   vapply(x, translate_one, character(1), USE.NAMES = FALSE)
@@ -101,7 +101,7 @@ build_timeseries_plot <- function(
     title.name <- NULL
   }
 
-  data <- if (inherits(proxy.table, "sf")) sf::st_drop_geometry(proxy.table) else as.data.frame(proxy.table)
+  data <- if (inherits(proxy.table, "sf")) sf::st_drop_geometry(proxy.table) else as.data.frame(proxy.table, optional = TRUE)
   if (!"Year" %in% names(data)) stop("A tabela precisa conter a coluna Year.", call. = FALSE)
   if (!primary.column %in% names(data)) stop("Variável principal não encontrada.", call. = FALSE)
 
@@ -197,7 +197,9 @@ build_timeseries_plot <- function(
 
   if (!is.null(different.group) && nzchar(different.group) &&
       different.group %in% names(long)) {
-    plot <- plot + ggplot2::facet_wrap(stats::reformulate(different.group), scales = "free_y")
+    plot <- plot + ggplot2::facet_wrap(
+      ggplot2::vars(!!as.name(different.group)), scales = "free_y"
+    )
   }
   plot
 }
@@ -479,13 +481,12 @@ mesh.map <- function(
   required_colors <- length(col.limits) + 2L
   col.used <- rep(col.used, length.out = required_colors)
   class_label <- plot_class_label(class, language)
-  class_label_lower <- tolower(class_label)
   if (is.null(title)) {
     title <- if (length(year.used) == 1L) {
       paste(class_label, text$in_year, year.used)
     } else {
       paste(
-        text$accumulated, class_label_lower, text$between,
+        text$accumulated, class_label, text$between,
         min(year.used), text$and, max(year.used)
       )
     }
@@ -495,7 +496,7 @@ mesh.map <- function(
 
   breaks <- c(-Inf, 0, col.limits, Inf)
   labels <- c(
-    paste(text$no, class_label_lower),
+    paste(text$no, class_label),
     if (length(col.limits)) {
       c(
         paste0("> 0 ", text$to, " ", col.limits[[1]], " km²"),

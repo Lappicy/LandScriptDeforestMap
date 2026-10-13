@@ -950,16 +950,16 @@ read_result_dataset <- function(path, layer = NULL) {
       )
     }
 
-    # Não use check.names = FALSE aqui. Em GeoPackages cuja coluna espacial se
-    # chama "geom", esse argumento pode impedir o sf de reconhecer a geometria.
-    data <- sf::st_read(path, layer = selected, quiet = TRUE)
+    # optional preserva os nomes dos atributos sem interferir na identificação
+    # da coluna espacial pelo sf (inclusive quando ela se chama "geom").
+    data <- sf::st_read(path, layer = selected, quiet = TRUE, optional = TRUE)
     if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
       stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
     }
     return(restore_numeric_result_column_names(drop_zm_geometry(data)))
   }
   if (extension %in% setdiff(supported_vector_extensions(), "gpkg")) {
-    data <- sf::st_read(path, quiet = TRUE)
+    data <- sf::st_read(path, quiet = TRUE, optional = TRUE)
     if (!inherits(data, "sf") || is.null(attr(data, "sf_column"))) {
       stop("A camada selecionada não possui geometria espacial válida.", call. = FALSE)
     }
@@ -975,7 +975,10 @@ read_result_dataset <- function(path, layer = NULL) {
     }
     selected <- layer %||% if ("Grid_ID" %in% sheets) "Grid_ID" else if ("Malha" %in% sheets) "Malha" else sheets[[1]]
     if (!selected %in% sheets) selected <- sheets[[1]]
-    return(restore_numeric_result_column_names(as.data.frame(readxl::read_excel(path, sheet = selected, .name_repair = "minimal"))))
+    return(restore_numeric_result_column_names(as.data.frame(
+      readxl::read_excel(path, sheet = selected, .name_repair = "minimal"),
+      optional = TRUE
+    )))
   }
   if (extension %in% c("csv")) {
     return(restore_numeric_result_column_names(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)))
@@ -999,5 +1002,5 @@ result_table_data <- function(data) {
   if (inherits(data, "sf")) {
     return(sf::st_drop_geometry(data))
   }
-  as.data.frame(data)
+  as.data.frame(data, optional = TRUE)
 }
