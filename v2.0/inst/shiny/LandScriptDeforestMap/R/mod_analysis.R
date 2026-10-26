@@ -201,7 +201,7 @@ analysis_ui <- function(id) {
   )
 }
 
-analysis_server <- function(id) {
+analysis_server <- function(id, language = shiny::reactive("pt-BR")) {
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
     session_dir <- tempfile("landscript_session_")
@@ -1037,7 +1037,7 @@ analysis_server <- function(id) {
     output$geo_summary <- shiny::renderTable({
       geo <- geo_data() %||% geo_preview()
       shiny::req(geo)
-      rbind(
+      summary <- rbind(
         geo_summary(geo),
         data.frame(
           item = "Área do pixel estimada",
@@ -1045,6 +1045,9 @@ analysis_server <- function(id) {
           stringsAsFactors = FALSE
         )
       )
+      summary$item <- ui_translate(summary$item, language())
+      names(summary) <- if (language() == "en") c("Item", "Value") else c("Item", "Valor")
+      summary
     }, striped = TRUE, bordered = FALSE, spacing = "s")
 
     output$attribute_table <- DT::renderDT({
@@ -1054,7 +1057,7 @@ analysis_server <- function(id) {
         utils::head(sf::st_drop_geometry(geo), 200),
         rownames = FALSE,
         filter = "top",
-        options = list(scrollX = TRUE, pageLength = 10)
+        options = list(scrollX = TRUE, pageLength = 10, language = datatable_language(language()))
       )
     })
 
@@ -1510,7 +1513,7 @@ analysis_server <- function(id) {
           class = "progress-status",
           shiny::strong(
             if (running()) shiny::icon("gear", class = "fa-spin"),
-            paste0(" ", round(state$percent), "% — ", state$stage)
+            paste0(" ", round(state$percent), "% — ", ui_translate(state$stage, language()))
           ),
           shiny::span(state$detail, class = "text-muted small"),
           if (!is.null(eta_text)) shiny::span(eta_text, class = "processing-eta")
@@ -1629,12 +1632,7 @@ analysis_server <- function(id) {
           scrollX = TRUE,
           pageLength = 5,
           dom = "frtip",
-          language = list(
-            search = "Pesquisar:",
-            lengthMenu = "Mostrar _MENU_ linhas",
-            info = "_START_–_END_ de _TOTAL_ linhas",
-            paginate = list(previous = "Anterior", `next` = "Próxima")
-          )
+          language = datatable_language(language())
         )
       )
     })

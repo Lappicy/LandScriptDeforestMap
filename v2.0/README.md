@@ -5,7 +5,7 @@ Esta versão reúne:
 - funções científicas atualizadas;
 - suporte às versões 4, 7.1, 8 e 10 do MapBiomas;
 - gráficos e mapas atualizados;
-- gráficos e mapas com alternância entre português do Brasil e inglês;
+- interface completa, gráficos e mapas com alternância entre português do Brasil e inglês;
 - aplicação R Shiny completa;
 - dados de exemplo.
 
@@ -73,6 +73,12 @@ library(LandScriptDeforestMap)
 ```r
 LandScriptDeforestMap::runLandScriptApp()
 ```
+
+Os botões **Português (Brasil)** e **English**, na navegação principal, alteram
+o idioma de todas as abas, controles, instruções, mensagens, tabelas de resumo,
+gráficos e mapas. A troca preserva os arquivos carregados, as configurações e os
+títulos personalizados. Nomes de colunas e valores dos arquivos de entrada são
+preservados. O idioma é independente para cada sessão e inicia em português.
 
 A aplicação é copiada para uma pasta temporária antes da execução. Isso evita
 que resultados sejam gravados dentro da pasta de instalação do pacote.

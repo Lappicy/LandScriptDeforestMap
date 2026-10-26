@@ -675,6 +675,31 @@ body {
   box-shadow: 0 0 0 0.2rem rgba(23, 107, 91, 0.16);
 }
 
+.navbar .plot-language-switch {
+  align-items: center;
+  margin: 0.35rem 0.6rem;
+}
+
+.navbar .plot-language-switch .language-button {
+  min-width: auto;
+  color: #fff;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.75);
+}
+
+.navbar .plot-language-switch .language-button:hover,
+.navbar .plot-language-switch .language-button:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.navbar .plot-language-switch .language-button.active {
+  color: var(--ls-accent);
+  background: #fff;
+  border-color: #fff;
+  box-shadow: none;
+}
+
 .citation-footer {
   width: 100%;
   padding: 1.25rem max(1rem, 3vw) 1.5rem;

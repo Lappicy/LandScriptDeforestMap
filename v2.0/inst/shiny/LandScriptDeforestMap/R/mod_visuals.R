@@ -5,8 +5,7 @@ visuals_ui <- function(id) {
       bslib::card_header(
         shiny::div(
           class = "source-header",
-          shiny::span("Fonte dos resultados"),
-          shiny::uiOutput(ns("language_buttons"), inline = TRUE)
+          shiny::span("Fonte dos resultados")
         )
       ),
       bslib::layout_columns(
@@ -111,7 +110,7 @@ visuals_ui <- function(id) {
   )
 }
 
-visuals_server <- function(id, automatic_result) {
+visuals_server <- function(id, automatic_result, language = shiny::reactive("pt-BR")) {
   shiny::moduleServer(id, function(input, output, session) {
     manual_path <- shiny::reactiveVal(NULL)
     manual_files <- shiny::reactiveVal(character())
@@ -119,54 +118,20 @@ visuals_server <- function(id, automatic_result) {
     manual_error <- shiny::reactiveVal(NULL)
     manual_source <- shiny::reactiveVal(NULL)
     manual_kind <- shiny::reactiveVal(NULL)
-    plot_language <- shiny::reactiveVal("pt-BR")
     upload_dir <- tempfile("landscript_visual_")
     dir.create(upload_dir, recursive = TRUE)
-
-    output$language_buttons <- shiny::renderUI({
-      language <- plot_language()
-      shiny::div(
-        class = "plot-language-switch",
-        shiny::actionButton(
-          session$ns("language_pt"),
-          "🇧🇷 Português (Brasil)",
-          class = paste(
-            "btn-sm language-button",
-            if (language == "pt-BR") "btn-primary active" else "btn-outline-secondary"
-          ),
-          title = "Traduzir gráfico e mapa para português do Brasil"
-        ),
-        shiny::actionButton(
-          session$ns("language_en"),
-          "🇺🇸 English",
-          class = paste(
-            "btn-sm language-button",
-            if (language == "en") "btn-primary active" else "btn-outline-secondary"
-          ),
-          title = "Translate chart and map into English"
-        )
-      )
-    })
-
-    shiny::observeEvent(input$language_pt, {
-      plot_language("pt-BR")
-    }, ignoreInit = TRUE)
-
-    shiny::observeEvent(input$language_en, {
-      plot_language("en")
-    }, ignoreInit = TRUE)
 
     default_chart_titles <- c(
       `pt-BR` = "Desmatamento e variação das classes",
       en = "Deforestation and class variation"
     )
-    shiny::observeEvent(plot_language(), {
+    shiny::observeEvent(language(), {
       current_title <- trimws(input$chart_title %||% "")
       if (current_title %in% unname(default_chart_titles)) {
         shiny::updateTextInput(
           session,
           "chart_title",
-          value = unname(default_chart_titles[[plot_language()]])
+          value = unname(default_chart_titles[[language()]])
         )
       }
     }, ignoreInit = FALSE)
@@ -174,7 +139,7 @@ visuals_server <- function(id, automatic_result) {
     chart_title_value <- shiny::reactive({
       current_title <- trimws(input$chart_title %||% "")
       if (current_title %in% unname(default_chart_titles)) {
-        return(unname(default_chart_titles[[plot_language()]]))
+        return(unname(default_chart_titles[[language()]]))
       }
       current_title
     })
@@ -549,7 +514,7 @@ visuals_server <- function(id, automatic_result) {
         title.name = chart_title_value(),
         different.group = chart_group,
         show.correlation = !identical(input$show_correlation, FALSE),
-        language = plot_language(),
+        language = language(),
         show.legend.title = !identical(input$chart_legend_title, FALSE)
       )
     })
@@ -559,7 +524,7 @@ visuals_server <- function(id, automatic_result) {
         chart_object(),
         error = function(e) {
           graphics::plot.new()
-          graphics::text(0.5, 0.5, conditionMessage(e), cex = 1.1)
+          graphics::text(0.5, 0.5, ui_translate(conditionMessage(e), language()), cex = 1.1)
         }
       )
     }, res = 110)
@@ -582,7 +547,7 @@ visuals_server <- function(id, automatic_result) {
         satellite = isTRUE(input$map_satellite),
         satellite.alpha = input$map_satellite_alpha %||% 1,
         fill.alpha = if (isTRUE(input$map_satellite)) input$map_fill_alpha %||% 0.65 else 1,
-        language = plot_language(),
+        language = language(),
         mesh.size.km = map_mesh_size_km(),
         show.legend.title = !identical(input$map_legend_title, FALSE),
         north.arrow.location = input$map_north_arrow %||% "tl"
@@ -601,7 +566,7 @@ visuals_server <- function(id, automatic_result) {
         },
         error = function(e) {
           graphics::plot.new()
-          graphics::text(0.5, 0.5, conditionMessage(e), cex = 1.1)
+          graphics::text(0.5, 0.5, ui_translate(conditionMessage(e), language()), cex = 1.1)
         }
       )
     }, res = 110)
@@ -621,14 +586,14 @@ visuals_server <- function(id, automatic_result) {
 
     output$download_chart <- shiny::downloadHandler(
       filename = function() {
-        prefix <- if (plot_language() == "pt-BR") "serie_temporal" else "time_series"
+        prefix <- if (language() == "pt-BR") "serie_temporal" else "time_series"
         paste0(prefix, ".", input$chart_format)
       },
       content = function(file) save_plot(chart_object(), file, input$chart_format, input$chart_width, input$chart_height)
     )
     output$download_map <- shiny::downloadHandler(
       filename = function() {
-        prefix <- if (plot_language() == "pt-BR") "mapa_resultados" else "results_map"
+        prefix <- if (language() == "pt-BR") "mapa_resultados" else "results_map"
         paste0(prefix, ".", input$map_format)
       },
       content = function(file) {

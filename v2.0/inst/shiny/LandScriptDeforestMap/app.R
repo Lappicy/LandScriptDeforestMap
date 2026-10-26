@@ -12,6 +12,7 @@ if (dir.exists(local_library)) {
 
 source(file.path(app_directory, "R", "utils.R"), local = globalenv())
 check_required_packages()
+source(file.path(app_directory, "R", "i18n.R"), local = globalenv())
 
 source(file.path(app_directory, "R", "spatial_io.R"), local = globalenv())
 source(file.path(app_directory, "R", "landscript_engine.R"), local = globalenv())
@@ -141,7 +142,12 @@ ui <- bslib::page_navbar(
       fade = TRUE
     ),
     shiny::tags$head(
-      shiny::tags$link(rel = "stylesheet", type = "text/css", href = "styles.css"),
+      shiny::tags$link(rel = "stylesheet", type = "text/css", href = "styles.css?v=20261026-i18n"),
+      shiny::tags$script(
+        id = "landscript-translations", type = "application/json",
+        shiny::HTML(jsonlite::toJSON(app_translations, auto_unbox = TRUE))
+      ),
+      shiny::tags$script(src = "i18n.js"),
       shiny::tags$script(shiny::HTML(
         "Shiny.addCustomMessageHandler('toggle-disabled', function(x) {
            var el = document.getElementById(x.id);
@@ -197,6 +203,7 @@ ui <- bslib::page_navbar(
       )
     )
   ),
+  bslib::nav_item(shiny::uiOutput("language_buttons", inline = TRUE)),
   bslib::nav_item(
     shiny::actionButton(
       "reset_app",
@@ -208,12 +215,19 @@ ui <- bslib::page_navbar(
 )
 
 server <- function(input, output, session) {
+  language <- shiny::reactiveVal("pt-BR")
+  output$language_buttons <- shiny::renderUI(language_buttons(language()))
+  shiny::observeEvent(input$language_pt, language("pt-BR"), ignoreInit = TRUE)
+  shiny::observeEvent(input$language_en, language("en"), ignoreInit = TRUE)
+  shiny::observe({
+    session$sendCustomMessage("landscript-language", list(language = language()))
+  })
   shiny::observeEvent(input$reset_app, {
     session$sendCustomMessage("landscript-reset", list())
   }, ignoreInit = TRUE)
 
-  result <- analysis_server("analysis")
-  visuals_server("visuals", result)
+  result <- analysis_server("analysis", language)
+  visuals_server("visuals", result, language)
 }
 
 shiny::shinyApp(ui, server)
