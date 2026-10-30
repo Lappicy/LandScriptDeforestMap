@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   const config = JSON.parse(document.getElementById("landscript-translations").textContent);
-  const dictionary = config.text;
+  let dictionary = config.text;
   const fragments = config.fragments.slice().sort((a, b) => b.length - a.length);
   const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(fragments.map(escapeRegex).join("|"), "gu");
@@ -12,12 +12,12 @@
   let scheduled = false;
 
   function translate(text) {
-    if (language !== "en") return text;
+    if (language === "pt-BR") return text;
     const core = text.trim();
     if (Object.prototype.hasOwnProperty.call(dictionary, core)) {
       return text.replace(core, () => dictionary[core]);
     }
-    return text.replace(/([0-9]+) de ([0-9]+)/g, "$1 of $2")
+    return text.replace(/([0-9]+) de ([0-9]+)/g, language === "fr" ? "$1 sur $2" : "$1 of $2")
       .replace(pattern, match => dictionary[match]);
   }
 
@@ -76,15 +76,15 @@
       if (value.startsWith("__level__:")) {
         const level = value.slice("__level__:".length);
         const labels = Object.assign({}, choiceLabels["visuals-auto_level"], { mesh: "Malha (ID_mesh)" });
-        if (labels[level]) return "Nível: " + labels[level];
+        if (labels[level]) return { prefix: "Nível: ", label: labels[level] };
       }
       if (value.startsWith("__column__:")) {
         // Only translate the prefix, even if a user column is named "Grupos".
         return { prefix: "Coluna: ", suffix: value.slice("__column__:".length) };
       }
     }
-    if (id === "visuals-gpkg_layer" && value === "" && ["Tabela", "Table", "Camada única", "Single layer"].includes(original)) {
-      return original === "Tabela" || original === "Table" ? "Tabela" : "Camada única";
+    if (id === "visuals-gpkg_layer" && value === "" && ["Tabela", "Table", "Tableau", "Camada única", "Single layer", "Couche unique"].includes(original)) {
+      return ["Tabela", "Table", "Tableau"].includes(original) ? "Tabela" : "Camada única";
     }
     return undefined;
   }
@@ -96,7 +96,8 @@
       options.forEach(([value, option]) => {
         const source = choiceLabel(select.id, value, option.text);
         if (source === undefined) return;
-        const label = typeof source === "string" ? translate(source) : translate(source.prefix) + source.suffix;
+        const label = typeof source === "string" ? translate(source) :
+          translate(source.prefix) + (source.label ? translate(source.label) : source.suffix);
         if (label === option.text) return;
         if (widget) {
           // Mutate label metadata and invalidate the display cache, avoiding
@@ -136,7 +137,11 @@
   function schedule() {
     if (!scheduled) { scheduled = true; window.requestAnimationFrame(apply); }
   }
-  function setLanguage(value) { language = value === "en" ? "en" : "pt-BR"; apply(); }
+  function setLanguage(value) {
+    language = ["en", "fr"].includes(value) ? value : "pt-BR";
+    dictionary = language === "fr" ? config.fr : config.text;
+    apply();
+  }
 
   window.LandScriptI18n = { translate, setLanguage, apply };
   Shiny.addCustomMessageHandler("landscript-language", message => setLanguage(message.language));

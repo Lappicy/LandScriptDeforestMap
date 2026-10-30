@@ -1046,7 +1046,7 @@ analysis_server <- function(id, language = shiny::reactive("pt-BR")) {
         )
       )
       summary$item <- ui_translate(summary$item, language())
-      names(summary) <- if (language() == "en") c("Item", "Value") else c("Item", "Valor")
+      names(summary) <- ui_translate(c("Item", "Valor"), language())
       summary
     }, striped = TRUE, bordered = FALSE, spacing = "s")
 

@@ -657,47 +657,63 @@ body {
   width: 100%;
 }
 
-.plot-language-switch {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.45rem;
+.navbar .language-menu {
+  margin: 0.35rem 0.6rem;
 }
 
-.plot-language-switch .language-button {
-  min-width: 9.5rem;
-  border-radius: 999px;
+.navbar .language-menu-toggle {
+  border-radius: 0.5rem;
+  color: #fff;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.75);
   font-weight: 650;
   white-space: nowrap;
 }
 
-.plot-language-switch .language-button.active {
-  box-shadow: 0 0 0 0.2rem rgba(23, 107, 91, 0.16);
-}
-
-.navbar .plot-language-switch {
-  align-items: center;
-  margin: 0.35rem 0.6rem;
-}
-
-.navbar .plot-language-switch .language-button {
-  min-width: auto;
-  color: #fff;
-  background: transparent;
-  border-color: rgba(255, 255, 255, 0.75);
-}
-
-.navbar .plot-language-switch .language-button:hover,
-.navbar .plot-language-switch .language-button:focus-visible {
+.navbar .language-menu-toggle:hover,
+.navbar .language-menu-toggle:focus-visible,
+.navbar .language-menu-toggle.show {
   color: #fff;
   background: rgba(255, 255, 255, 0.18);
 }
 
-.navbar .plot-language-switch .language-button.active {
-  color: var(--ls-accent);
-  background: #fff;
-  border-color: #fff;
-  box-shadow: none;
+.language-menu .dropdown-menu {
+  --bs-dropdown-bg: #fff;
+  --bs-dropdown-link-color: var(--ls-ink);
+  --bs-dropdown-link-hover-color: var(--ls-ink);
+  --bs-dropdown-link-hover-bg: rgba(23, 107, 91, 0.08);
+  --bs-dropdown-link-active-color: #fff;
+  --bs-dropdown-link-active-bg: var(--ls-accent);
+  min-width: 14rem;
+  padding: 0.35rem;
+  border: 1px solid rgba(23, 107, 91, 0.16);
+  border-radius: 0.65rem;
+  box-shadow: 0 8px 24px rgba(25, 48, 43, 0.16);
+}
+
+.language-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.35rem;
+}
+
+.language-option-check {
+  display: inline-flex;
+  justify-content: center;
+  width: 1rem;
+  flex: 0 0 1rem;
+}
+
+.language-flag {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1rem;
+  flex: 0 0 1.5rem;
+  object-fit: cover;
+  border-radius: 0.1rem;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.14);
 }
 
 .citation-footer {
@@ -858,12 +874,4 @@ body {
     flex-direction: column;
   }
 
-  .plot-language-switch {
-    justify-content: flex-start;
-    width: 100%;
-  }
-
-  .plot-language-switch .language-button {
-    flex: 1 1 10rem;
-  }
 }

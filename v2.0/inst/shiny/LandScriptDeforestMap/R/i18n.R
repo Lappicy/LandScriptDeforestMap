@@ -3,14 +3,19 @@ app_translations <- jsonlite::read_json(
   file.path(getOption("landscript.app_dir", getwd()), "www", "translations.json"),
   simplifyVector = TRUE
 )
+app_translations$fr <- jsonlite::read_json(
+  file.path(getOption("landscript.app_dir", getwd()), "www", "translations-fr.json"),
+  simplifyVector = TRUE
+)
 
 normalize_ui_language <- function(language) {
-  if (identical(language, "en")) "en" else "pt-BR"
+  if (identical(language, "en")) "en" else if (identical(language, "fr")) "fr" else "pt-BR"
 }
 
 ui_translate <- function(text, language = "pt-BR") {
-  if (normalize_ui_language(language) == "pt-BR") return(text)
-  dictionary <- unlist(app_translations$text, use.names = TRUE)
+  language <- normalize_ui_language(language)
+  if (language == "pt-BR") return(text)
+  dictionary <- unlist(app_translations[[if (language == "fr") "fr" else "text"]], use.names = TRUE)
   fragments <- app_translations$fragments
   fragments <- fragments[order(nchar(fragments), decreasing = TRUE)]
   # Use one pass over the original message so translations cannot translate
@@ -21,7 +26,8 @@ ui_translate <- function(text, language = "pt-BR") {
     if (core %in% names(dictionary)) {
       return(substring_replace(value, core, dictionary[[core]]))
     }
-    value <- gsub("([0-9]+) de ([0-9]+)", "\\1 of \\2", value)
+    value <- gsub("([0-9]+) de ([0-9]+)",
+                  if (language == "fr") "\\1 sur \\2" else "\\1 of \\2", value)
     parts <- character()
     while (nzchar(value)) {
       positions <- vapply(fragments, function(key) {
@@ -46,28 +52,66 @@ substring_replace <- function(text, source, replacement) {
          substring(text, start + nchar(source)))
 }
 
-language_buttons <- function(language = "pt-BR") {
+language_menu <- function(language = "pt-BR") {
+  language <- normalize_ui_language(language)
+  label <- switch(language, en = "Language", fr = "Language / Langue", "Language / Idioma")
+  labels <- c(`pt-BR` = "Português (Brasil)", en = "English", fr = "Français")
+  input_ids <- c(`pt-BR` = "language_pt", en = "language_en", fr = "language_fr")
+  flags <- c(`pt-BR` = "br", en = "us", fr = "fr")
   shiny::div(
-    class = "plot-language-switch",
-    role = "group",
-    `aria-label` = "Language / Idioma",
-    lapply(c("pt-BR", "en"), function(value) {
-      selected <- identical(language, value)
-      shiny::actionButton(
-        if (value == "en") "language_en" else "language_pt",
-        if (value == "en") "🇺🇸 English" else "🇧🇷 Português (Brasil)",
-        class = paste("btn-sm language-button",
-                      if (selected) "btn-primary active" else "btn-outline-secondary"),
-        `aria-pressed` = if (selected) "true" else "false",
-        title = if (value == "en") "Switch the entire interface to English" else {
-          "Traduzir toda a interface para português do Brasil"
-        }
-      )
-    })
+    class = "dropdown language-menu",
+    `data-no-i18n` = "true",
+    shiny::tags$button(
+      id = "language_menu_toggle",
+      type = "button",
+      class = "btn btn-outline-light btn-sm dropdown-toggle language-menu-toggle",
+      `data-bs-toggle` = "dropdown",
+      `aria-expanded` = "false",
+      shiny::icon("language"),
+      label
+    ),
+    shiny::tags$ul(
+      class = "dropdown-menu dropdown-menu-end",
+      `aria-labelledby` = "language_menu_toggle",
+      lapply(names(labels), function(value) {
+        selected <- identical(language, value)
+        shiny::tags$li(
+          shiny::actionLink(
+            unname(input_ids[[value]]),
+            shiny::tagList(
+              shiny::span(
+                class = "language-option-check",
+                if (selected) shiny::icon("check")
+              ),
+              shiny::img(
+                src = paste0("landscript/flags/", flags[[value]], ".svg"),
+                class = "language-flag", alt = "", `aria-hidden` = "true",
+                width = 24, height = 16
+              ),
+              unname(labels[[value]])
+            ),
+            class = paste("dropdown-item language-menu-option", if (selected) "active"),
+            lang = value,
+            `aria-current` = if (selected) "true" else NULL
+          )
+        )
+      })
+    )
   )
 }
 
 datatable_language <- function(language = "pt-BR") {
+  if (normalize_ui_language(language) == "fr") {
+    return(list(
+      search = "Rechercher :", lengthMenu = "Afficher _MENU_ lignes",
+      info = "_START_–_END_ sur _TOTAL_ lignes", infoEmpty = "0 ligne",
+      infoFiltered = "(filtrées parmi _MAX_ lignes au total)",
+      emptyTable = "Aucune donnée disponible", zeroRecords = "Aucun résultat correspondant",
+      loadingRecords = "Chargement…", processing = "Traitement…",
+      paginate = list(first = "Première", last = "Dernière", previous = "Précédente", `next` = "Suivante"),
+      aria = list(sortAscending = ": activer pour trier par ordre croissant", sortDescending = ": activer pour trier par ordre décroissant")
+    ))
+  }
   if (normalize_ui_language(language) == "en") {
     return(list(
       search = "Search:", lengthMenu = "Show _MENU_ rows",

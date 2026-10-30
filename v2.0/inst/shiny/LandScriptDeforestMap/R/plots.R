@@ -1,5 +1,6 @@
 normalize_plot_language <- function(language = "pt-BR") {
   language <- tolower(trimws(as.character(language %||% "pt-BR")[[1]]))
+  if (language %in% c("fr", "fr-fr", "français", "french")) return("fr")
   if (language %in% c("en", "en-us", "en-gb", "english")) "en" else "pt-BR"
 }
 
@@ -35,6 +36,20 @@ plot_class_label <- function(x, language = "pt-BR") {
       Agriculture = "Agriculture",
       CropLivestock = "Crop and livestock",
       Fire = "Fire"
+    ),
+    fr = c(
+      Deforestation = "Déforestation",
+      Reforestation = "Reboisement",
+      Forest = "Forêt",
+      NonForest = "Hors forêt",
+      Water = "Eau",
+      Others = "Autres",
+      Urban = "Zone urbaine",
+      Mining = "Exploitation minière",
+      Pasture = "Pâturage",
+      Agriculture = "Agriculture",
+      CropLivestock = "Agriculture et élevage",
+      Fire = "Feu"
     )
   )
 
@@ -53,6 +68,10 @@ plot_class_label <- function(x, language = "pt-BR") {
       }
       if (language == "pt-BR") {
         descriptor <- if (prefix == "Variation_") "Variação de " else "Crescimento de "
+        return(paste0(descriptor, base_label))
+      }
+      if (language == "fr") {
+        descriptor <- if (prefix == "Variation_") "Variation de " else "Croissance de "
         return(paste0(descriptor, base_label))
       }
       descriptor <- if (prefix == "Variation_") " variation" else " growth"
@@ -85,6 +104,14 @@ build_timeseries_plot <- function(
       class = "Classe",
       best_correlation = "Maior correlação",
       unavailable_correlation = "Correlação indisponível para os dados selecionados"
+    )
+  } else if (language == "fr") {
+    list(
+      default_title = "Déforestation et variation des classes",
+      year = "Année",
+      class = "Classe",
+      best_correlation = "Corrélation la plus élevée",
+      unavailable_correlation = "Corrélation indisponible pour les données sélectionnées"
     )
   } else {
     list(
@@ -161,6 +188,8 @@ build_timeseries_plot <- function(
   display_labels <- plot_class_label(selected, language)
   number_format <- if (language == "pt-BR") {
     function(x) format(x, big.mark = ".", decimal.mark = ",", scientific = FALSE)
+  } else if (language == "fr") {
+    function(x) format(x, big.mark = " ", decimal.mark = ",", scientific = FALSE)
   } else {
     function(x) format(x, big.mark = ",", decimal.mark = ".", scientific = FALSE)
   }
@@ -341,7 +370,7 @@ format_mesh_dimension_km <- function(value, language = "pt-BR") {
     nsmall = digits,
     trim = TRUE,
     scientific = FALSE,
-    decimal.mark = if (identical(language, "pt-BR")) "," else ".",
+    decimal.mark = if (normalize_plot_language(language) %in% c("pt-BR", "fr")) "," else ".",
     big.mark = ""
   )
 }
@@ -387,6 +416,17 @@ mesh.map <- function(
       and = "e",
       highlight = "Destaque",
       mesh_size = "Tamanho da malha"
+    )
+  } else if (language == "fr") {
+    list(
+      no = "Sans",
+      to = "à",
+      in_year = "en",
+      accumulated = "Cumul de",
+      between = "entre",
+      and = "et",
+      highlight = "Mise en évidence",
+      mesh_size = "Taille de la grille"
     )
   } else {
     list(

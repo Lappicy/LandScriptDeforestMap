@@ -123,7 +123,8 @@ visuals_server <- function(id, automatic_result, language = shiny::reactive("pt-
 
     default_chart_titles <- c(
       `pt-BR` = "Desmatamento e variação das classes",
-      en = "Deforestation and class variation"
+      en = "Deforestation and class variation",
+      fr = "Déforestation et variation des classes"
     )
     shiny::observeEvent(language(), {
       current_title <- trimws(input$chart_title %||% "")
@@ -586,14 +587,14 @@ visuals_server <- function(id, automatic_result, language = shiny::reactive("pt-
 
     output$download_chart <- shiny::downloadHandler(
       filename = function() {
-        prefix <- if (language() == "pt-BR") "serie_temporal" else "time_series"
+        prefix <- switch(language(), fr = "serie_temporelle", en = "time_series", "serie_temporal")
         paste0(prefix, ".", input$chart_format)
       },
       content = function(file) save_plot(chart_object(), file, input$chart_format, input$chart_width, input$chart_height)
     )
     output$download_map <- shiny::downloadHandler(
       filename = function() {
-        prefix <- if (language() == "pt-BR") "mapa_resultados" else "results_map"
+        prefix <- switch(language(), fr = "carte_resultats", en = "results_map", "mapa_resultados")
         paste0(prefix, ".", input$map_format)
       },
       content = function(file) {

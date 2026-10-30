@@ -129,7 +129,7 @@ ui <- bslib::page_navbar(
   title = shiny::div(
     class = "brand-lockup",
     shiny::span(class = "brand-mark", shiny::icon("earth-americas")),
-    shiny::strong("LandScriptDeforestMap")
+    shiny::strong("LandScript App")
   ),
   theme = theme,
   fillable = FALSE,
@@ -142,12 +142,12 @@ ui <- bslib::page_navbar(
       fade = TRUE
     ),
     shiny::tags$head(
-      shiny::tags$link(rel = "stylesheet", type = "text/css", href = "styles.css?v=20261026-i18n"),
+      shiny::tags$link(rel = "stylesheet", type = "text/css", href = "styles.css?v=20261026-fr"),
       shiny::tags$script(
         id = "landscript-translations", type = "application/json",
         shiny::HTML(jsonlite::toJSON(app_translations, auto_unbox = TRUE))
       ),
-      shiny::tags$script(src = "i18n.js"),
+      shiny::tags$script(src = "i18n.js?v=20261026-fr"),
       shiny::tags$script(shiny::HTML(
         "Shiny.addCustomMessageHandler('toggle-disabled', function(x) {
            var el = document.getElementById(x.id);
@@ -174,13 +174,13 @@ ui <- bslib::page_navbar(
     visuals_ui("visuals")
   ),
   bslib::nav_panel(
-    "Sobre e Como citar",
+    "Tutorial e como citar",
     icon = shiny::icon("circle-info"),
     bslib::layout_columns(
       col_widths = c(7, 5),
       bslib::card(
         bslib::card_header("Sobre a plataforma"),
-        shiny::h3("Análise espacial de desmatamento com imagens classificadas"),
+        shiny::h3("Análise de mudanças espaciais e temporais em imagens classificadas"),
         shiny::p(
           "Esta aplicação integra o fluxo do LandScriptDeforestMap em uma interface ",
           "interativa: criação de malha, contagem zonal das classes, conversão para ",
@@ -203,7 +203,7 @@ ui <- bslib::page_navbar(
       )
     )
   ),
-  bslib::nav_item(shiny::uiOutput("language_buttons", inline = TRUE)),
+  bslib::nav_item(shiny::uiOutput("language_menu", inline = TRUE)),
   bslib::nav_item(
     shiny::actionButton(
       "reset_app",
@@ -216,9 +216,10 @@ ui <- bslib::page_navbar(
 
 server <- function(input, output, session) {
   language <- shiny::reactiveVal("pt-BR")
-  output$language_buttons <- shiny::renderUI(language_buttons(language()))
+  output$language_menu <- shiny::renderUI(language_menu(language()))
   shiny::observeEvent(input$language_pt, language("pt-BR"), ignoreInit = TRUE)
   shiny::observeEvent(input$language_en, language("en"), ignoreInit = TRUE)
+  shiny::observeEvent(input$language_fr, language("fr"), ignoreInit = TRUE)
   shiny::observe({
     session$sendCustomMessage("landscript-language", list(language = language()))
   })
